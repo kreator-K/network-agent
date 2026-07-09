@@ -243,6 +243,33 @@ class RelationshipTrackerAgent:
             ).fetchone()
         return _calendar_block_from_row(row)
 
+    def get_upcoming_meetings(self, today: str) -> list[dict[str, str | None]]:
+        """Return upcoming confirmed meetings with prospect display details."""
+        with connect(self.database_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    prospects.name AS prospect_name,
+                    calendar_blocks.id AS calendar_block_id,
+                    calendar_blocks.prospect_id,
+                    calendar_blocks.scheduled_date,
+                    calendar_blocks.start_time,
+                    calendar_blocks.end_time,
+                    calendar_blocks.timezone,
+                    calendar_blocks.notes,
+                    calendar_blocks.external_event_id
+                FROM calendar_blocks
+                JOIN prospects ON prospects.id = calendar_blocks.prospect_id
+                WHERE calendar_blocks.scheduled_date >= ?
+                    AND prospects.status = 'meeting_confirmed'
+                ORDER BY calendar_blocks.scheduled_date ASC,
+                    calendar_blocks.start_time ASC,
+                    calendar_blocks.id ASC
+                """,
+                (today,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def _ensure_prospect_exists(
         self,
         connection: sqlite3.Connection,
