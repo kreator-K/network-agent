@@ -82,6 +82,15 @@ CREATE TABLE IF NOT EXISTS refinement_history (
     CHECK (accepted IN (0, 1))
 );
 
+CREATE TABLE IF NOT EXISTS refinement_outcomes (
+    id INTEGER PRIMARY KEY,
+    agent_name TEXT NOT NULL,
+    parameter_version INTEGER NOT NULL,
+    metric_value REAL NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK (agent_name IN ('outreach_draft_agent', 'content_inspiration_agent'))
+);
+
 CREATE TABLE IF NOT EXISTS content_posts (
     id INTEGER PRIMARY KEY,
     draft_text TEXT NOT NULL,
@@ -115,5 +124,7 @@ CREATE INDEX IF NOT EXISTS idx_refinable_parameters_agent_key
     ON refinable_parameters(agent_name, parameter_key);
 CREATE INDEX IF NOT EXISTS idx_refinement_history_agent_name ON refinement_history(agent_name);
 CREATE INDEX IF NOT EXISTS idx_refinement_history_version ON refinement_history(version);
+CREATE INDEX IF NOT EXISTS idx_refinement_outcomes_agent_version
+    ON refinement_outcomes(agent_name, parameter_version);
 CREATE INDEX IF NOT EXISTS idx_content_posts_status ON content_posts(status);
 CREATE INDEX IF NOT EXISTS idx_calendar_blocks_prospect_id ON calendar_blocks(prospect_id);

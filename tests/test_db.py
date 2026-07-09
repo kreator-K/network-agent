@@ -19,6 +19,7 @@ EXPECTED_TABLES = [
     "prospects",
     "refinable_parameters",
     "refinement_history",
+    "refinement_outcomes",
 ]
 
 
