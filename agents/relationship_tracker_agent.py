@@ -171,6 +171,22 @@ class RelationshipTrackerAgent:
             ).fetchall()
         return [_interaction_from_row(row) for row in rows]
 
+    def get_prospect(self, prospect_id: int) -> Prospect:
+        """Return a single prospect by ID."""
+        with connect(self.database_path) as connection:
+            return self._get_prospect(connection, prospect_id)
+
+    def update_prospect_notes(self, prospect_id: int, notes: str) -> Prospect:
+        """Update prospect notes and return the changed prospect."""
+        now = _utc_now()
+        with connect(self.database_path) as connection:
+            self._ensure_prospect_exists(connection, prospect_id)
+            connection.execute(
+                "UPDATE prospects SET notes = ?, updated_at = ? WHERE id = ?",
+                (notes, now, prospect_id),
+            )
+            return self._get_prospect(connection, prospect_id)
+
     def mark_meeting_confirmed(
         self,
         prospect_id: int,
