@@ -5,7 +5,6 @@ from typing import Protocol
 
 from agents.relationship_tracker_agent import (
     ProspectNotFoundError,
-    RelationshipTrackerAgent,
 )
 from db.models import Prospect
 
@@ -88,7 +87,7 @@ class ProspectDiscoveryAgent:
     def intake_bulk(
         self,
         prospects: list[dict],
-        tracker: RelationshipTrackerAgent,
+        tracker: TrackerProtocol,
     ) -> dict:
         """Add valid prospect rows and skip invalid rows with reasons."""
         added: list[Prospect] = []

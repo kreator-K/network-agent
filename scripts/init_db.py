@@ -7,8 +7,8 @@ import sys
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
-from config.settings import settings
-from db.database import initialize_database
+from config.settings import settings  # noqa: E402
+from db.database import initialize_database  # noqa: E402
 
 
 def main() -> None:

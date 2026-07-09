@@ -3,12 +3,13 @@
 import json
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic import ValidationError
 
 from db.database import connect, fetch_all_rows, initialize_database
-from db.models import Prospect, RefinementHistoryEntry
+from db.models import Prospect, ProspectStatus, RefinementHistoryEntry
 
 
 EXPECTED_TABLES = [
@@ -42,7 +43,8 @@ def _insert_prospect(database_path: Path) -> int:
             VALUES ('Ada Lovelace', 'not_contacted', '2026-01-01', '2026-01-01')
             """
         )
-        return int(cursor.lastrowid)
+        assert cursor.lastrowid is not None
+        return cursor.lastrowid
 
 
 def test_initialize_database_creates_requested_tables(tmp_path: Path) -> None:
@@ -178,7 +180,7 @@ def test_prospect_model_rejects_invalid_status() -> None:
     with pytest.raises(ValidationError):
         Prospect(
             name="Ada Lovelace",
-            status="invalid",
+            status=cast(ProspectStatus, "invalid"),
             created_at="2026-01-01",
             updated_at="2026-01-01",
         )

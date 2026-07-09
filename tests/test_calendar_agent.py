@@ -1,6 +1,7 @@
 """Tests for explicit calendar confirmation behavior."""
 
 from datetime import date, timedelta
+from typing import cast
 
 import pytest
 import pytest_mock
@@ -141,7 +142,8 @@ def test_confirm_meeting_records_via_tracker(
         tracker=tracker,
     )
 
-    assert result["calendar_block"].prospect_id == 7
+    calendar_block = cast(CalendarBlock, result["calendar_block"])
+    assert calendar_block.prospect_id == 7
     assert tracker.mark_calls == [
         {
             "prospect_id": 7,

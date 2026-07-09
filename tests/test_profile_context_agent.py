@@ -1,11 +1,13 @@
 """Tests for ProfileContextAgent."""
 
+from typing import Any
+
 from agents.profile_context_agent import ProfileContextAgent
 from db.models import Prospect
 
 
 def _prospect(**overrides: object) -> Prospect:
-    data: dict[str, object] = {
+    data: dict[str, Any] = {
         "name": "Ada Lovelace",
         "created_at": "2026-01-01",
         "updated_at": "2026-01-01",
