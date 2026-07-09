@@ -1,0 +1,8 @@
+python-telegram-bot
+python-dotenv
+requests
+pydantic
+pytest
+pytest-mock
+mypy
+ruff

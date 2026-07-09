@@ -1,0 +1,24 @@
+{
+  "rules": [
+    {
+      "rule_key": "cadence_floor_days",
+      "rule_value": "21",
+      "description": "Follow-up cadence must never suggest contact more frequently than 21 days."
+    },
+    {
+      "rule_key": "no_fabrication",
+      "rule_value": "true",
+      "description": "Agents must not fabricate shared connections, experiences, skills, credentials, or claims."
+    },
+    {
+      "rule_key": "linkedin_outreach_draft_only",
+      "rule_value": "true",
+      "description": "LinkedIn outreach drafts must be manually copied and sent by the user; agents must not send connection requests or messages."
+    },
+    {
+      "rule_key": "tone_floor",
+      "rule_value": "professional, concise, and non-pushy",
+      "description": "Generated text should stay professional, concise, and non-pushy."
+    }
+  ]
+}
