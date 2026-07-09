@@ -1,21 +1,22 @@
-"""Image generation gateway stub."""
+"""Image generation gateway.
 
-from typing import Any
+Phase 1 supports deterministic mock image paths only. Real image-provider
+integration belongs to Phase 3 and is intentionally not implemented here.
+"""
 
 
-class ImageGateway:
-    """Mock-first boundary for future image generation.
+MOCK_IMAGE_PATH = "mock://generated-linkedin-image.png"
 
-    Purpose:
-        Support ContentInspirationAgent image workflows without direct provider
-        calls from agents.
-    Inputs:
-        Image prompt, selected user-uploaded image metadata, and generation
-        preferences.
-    Outputs:
-        Mock image-selection or generation metadata.
+
+def generate_image(prompt: str, mock_mode: bool) -> str:
+    """Return a generated image path.
+
+    In mock mode this returns a deterministic marker path without calling any
+    real API. In real mode this raises because actual image-provider
+    integration is Phase 3 scope.
     """
-
-    def generate(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Return a mock image generation response."""
-        return {"mock": True, "payload": payload}
+    if mock_mode:
+        return MOCK_IMAGE_PATH
+    raise NotImplementedError(
+        "Real image generation is Phase 3 scope and is not implemented yet."
+    )

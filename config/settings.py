@@ -22,6 +22,10 @@ class Settings:
 
     mock_mode: bool = _env_bool("MOCK_MODE", True)
     nvidia_api_key: str = os.getenv("NVIDIA_API_KEY", "")
+    nvidia_model: str = os.getenv("NVIDIA_MODEL", "meta/llama-3.1-8b-instruct")
+    nvidia_max_tokens: int = int(os.getenv("NVIDIA_MAX_TOKENS", "800"))
+    nvidia_temperature: float = float(os.getenv("NVIDIA_TEMPERATURE", "0.2"))
+    nvidia_timeout_seconds: int = int(os.getenv("NVIDIA_TIMEOUT_SECONDS", "30"))
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     google_calendar_credentials_path: str = os.getenv(
         "GOOGLE_CALENDAR_CREDENTIALS_PATH", ""
