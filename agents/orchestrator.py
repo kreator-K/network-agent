@@ -149,6 +149,24 @@ class NetworkOrchestrator:
         except Exception as exc:
             _raise_with_context("draft_followup", {"prospect_id": prospect_id}, exc)
 
+    def mark_outreach_sent(
+        self,
+        prospect_id: int,
+        *,
+        database: DatabaseRef,
+    ) -> dict[str, Prospect | str]:
+        """Mark manually sent outreach after explicit Telegram approval."""
+        try:
+            tracker = self._tracker(database)
+            prospect = tracker.update_status(prospect_id, "connection_sent")
+            return {"prospect": prospect, "status": "connection_sent"}
+        except Exception as exc:
+            _raise_with_context(
+                "mark_outreach_sent",
+                {"prospect_id": prospect_id},
+                exc,
+            )
+
     def get_followups_due(self, *, database: DatabaseRef) -> list[dict[str, Any]]:
         """Return due follow-ups formatted for Telegram display."""
         try:
