@@ -4,12 +4,12 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 import sqlite3
-from typing import Any, Protocol
+from typing import Protocol
 
 from config.settings import settings
 from db.models import CalendarBlock
 from db.database import connect
-from integrations.google_calendar_mcp_client import GoogleCalendarMCPError
+from integrations.google_calendar_mcp_client import GoogleCalendarMCPClient, GoogleCalendarMCPError
 from integrations import google_calendar_client
 
 
@@ -74,7 +74,7 @@ class CalendarAgent:
         Calendar block records plus sync status metadata.
     """
 
-    def __init__(self, database_path: str | Path | None = None, calendar_client: Any = None) -> None:
+    def __init__(self, database_path: str | Path | None = None, calendar_client: GoogleCalendarMCPClient | None = None) -> None:
         self.database_path = Path(database_path) if database_path is not None else None
         self.calendar_client = calendar_client
 
@@ -94,11 +94,10 @@ class CalendarAgent:
             raise CalendarAgentError("end must be later than start.")
         if self.database_path is None:
             raise CalendarPersistenceError("A database_path is required for event persistence.")
-        database_path = self.database_path
         if self.calendar_client is None:
             raise CalendarProviderError("An injected Google Calendar client is required.")
         key = f"google_calendar:{prospect_id}:{start.isoformat()}"
-        with connect(database_path) as connection:
+        with connect(self.database_path) as connection:
             row = connection.execute("SELECT * FROM calendar_blocks WHERE idempotency_key = ?", (key,)).fetchone()
             if row is not None and row["sync_status"] == "created":
                 return _calendar_result(row, True)
