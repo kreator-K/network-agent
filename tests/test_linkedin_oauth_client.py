@@ -32,7 +32,7 @@ def make_client(tmp_path: Path) -> LinkedInOAuthClient:
     return LinkedInOAuthClient(
         client_id="client-id",
         client_secret="client-secret",
-        redirect_uri="http://localhost/callback",
+        redirect_uri="https://localhost/callback",
         encryption_key=KEY,
         token_path=tmp_path / "linkedin.enc",
         http_session=FakeHTTP(),

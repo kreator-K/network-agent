@@ -454,3 +454,32 @@ CREATE INDEX IF NOT EXISTS idx_content_posts_status ON content_posts(status);
 CREATE INDEX IF NOT EXISTS idx_briefing_runs_scheduled_for ON briefing_runs(scheduled_for DESC);
 CREATE INDEX IF NOT EXISTS idx_prospect_candidates_status_score ON prospect_candidates(status, total_score DESC);
 CREATE INDEX IF NOT EXISTS idx_calendar_blocks_prospect_id ON calendar_blocks(prospect_id);
+
+CREATE TABLE IF NOT EXISTS linkedin_oauth_states (
+    id INTEGER PRIMARY KEY,
+    state_hash TEXT NOT NULL UNIQUE,
+    telegram_user_id TEXT NOT NULL,
+    telegram_chat_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    consumed_at TEXT,
+    CHECK (status IN ('pending', 'consumed', 'expired', 'cancelled', 'failed'))
+);
+
+CREATE TABLE IF NOT EXISTS linkedin_credentials (
+    id INTEGER PRIMARY KEY,
+    encrypted_access_token BLOB NOT NULL,
+    encrypted_refresh_token BLOB,
+    oidc_subject TEXT,
+    granted_scopes TEXT NOT NULL,
+    authorized_at TEXT NOT NULL,
+    access_token_expires_at TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    revoked_at TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    CHECK (status IN ('active', 'expired', 'revoked'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_linkedin_credentials_active
+ON linkedin_credentials(status) WHERE status = 'active';

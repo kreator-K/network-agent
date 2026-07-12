@@ -21,6 +21,8 @@ EXPECTED_TABLES = [
     "content_preference_feedback",
     "core_intent",
     "interactions",
+    "linkedin_credentials",
+    "linkedin_oauth_states",
     "personal_brand_profile",
     "prospect_candidates",
     "prospects",

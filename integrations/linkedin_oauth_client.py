@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import secrets
+import base64
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -47,6 +49,8 @@ class LinkedInOAuthClient:
         encryption_key: str,
         token_path: str | Path,
         http_session: Any = requests,
+        scopes: str = "openid profile w_member_social",
+        timeout_seconds: int = 20,
     ) -> None:
         self.client_id = client_id
         self.client_secret = client_secret
@@ -54,11 +58,18 @@ class LinkedInOAuthClient:
         self._fernet = self._build_fernet(encryption_key)
         self.token_path = Path(token_path)
         self.http_session = http_session
+        requested = tuple(scopes.split())
+        if set(requested) != set(LINKEDIN_SCOPES):
+            raise LinkedInOAuthError("LinkedIn OAuth scopes exceed the allowlist.")
+        self.scopes = requested
+        self.timeout_seconds = timeout_seconds
 
     def authorization_url(self, state: str | None = None) -> tuple[str, str]:
         """Return the consent URL and CSRF state for the allowlisted scopes."""
         if not self.client_id or not self.redirect_uri:
             raise LinkedInOAuthError("LinkedIn OAuth client ID and redirect URI are required.")
+        if not self.redirect_uri.startswith("https://"):
+            raise LinkedInOAuthError("LinkedIn redirect URI must use HTTPS.")
         csrf_state = state or secrets.token_urlsafe(32)
         query = urlencode(
             {
@@ -66,7 +77,7 @@ class LinkedInOAuthClient:
                 "client_id": self.client_id,
                 "redirect_uri": self.redirect_uri,
                 "state": csrf_state,
-                "scope": " ".join(LINKEDIN_SCOPES),
+                "scope": " ".join(self.scopes),
             }
         )
         return f"{AUTHORIZATION_URL}?{query}", csrf_state
@@ -84,7 +95,7 @@ class LinkedInOAuthClient:
                 "client_secret": self.client_secret,
                 "redirect_uri": self.redirect_uri,
             },
-            timeout=20,
+            timeout=self.timeout_seconds,
         )
         if response.status_code != 200:
             raise LinkedInOAuthError("LinkedIn OAuth token exchange failed.")
@@ -97,7 +108,7 @@ class LinkedInOAuthClient:
             access_token=str(access_token),
             refresh_token=str(payload["refresh_token"]) if payload.get("refresh_token") else None,
             expires_in=int(payload["expires_in"]) if payload.get("expires_in") is not None else None,
-            scope=str(payload.get("scope") or " ".join(LINKEDIN_SCOPES)),
+            scope=str(payload.get("scope") or " ".join(self.scopes)),
         )
         self.save_tokens(token_set)
         return token_set
@@ -120,6 +131,23 @@ class LinkedInOAuthClient:
             )
         except (OSError, InvalidToken, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise LinkedInOAuthError("Stored LinkedIn OAuth tokens could not be decrypted.") from exc
+
+    @staticmethod
+    def validate_id_token(id_token: str, *, client_id: str) -> dict[str, Any]:
+        """Validate required OIDC claims structurally before accepting identity."""
+        try:
+            header, payload, _signature = id_token.split(".")
+            _ = json.loads(base64.urlsafe_b64decode(header + "=="))
+            claims = json.loads(base64.urlsafe_b64decode(payload + "=="))
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise LinkedInOAuthError("LinkedIn OIDC ID token is malformed.") from exc
+        if claims.get("iss") != "https://www.linkedin.com/oauth":
+            raise LinkedInOAuthError("LinkedIn OIDC issuer is invalid.")
+        if claims.get("aud") != client_id:
+            raise LinkedInOAuthError("LinkedIn OIDC audience is invalid.")
+        if int(claims.get("exp", 0)) <= int(time.time()) or not claims.get("sub"):
+            raise LinkedInOAuthError("LinkedIn OIDC ID token is expired or missing subject.")
+        return claims
 
     @staticmethod
     def _build_fernet(key: str) -> Fernet:
