@@ -23,6 +23,9 @@ This is not an automation/spam tool. No agent may autonomously send a LinkedIn c
 - All model calls must go through `ModelOrchestrationAgent`. No agent calls an LLM/VLM/image provider directly.
 - `NetworkOrchestrator` coordinates all specialist agents. Telegram bot handlers call the orchestrator, never agents directly.
 - `LinkedInPublishAgent` is the only module allowed to call the LinkedIn API. It will be built fresh, has no opinion on content quality, and only authenticates and posts what it is given after human approval.
+- LinkedIn uses the official authorization-code OAuth flow and REST APIs directly. LinkedIn MCP is prohibited: do not configure, call, create, or maintain a LinkedIn MCP server.
+- Phase 8G-B1 is OAuth foundation only. It requests only `openid`, `profile`, and `w_member_social`; tokens must be encrypted before storage, and `LINKEDIN_PUBLISH_MODE=disabled` must remain in force.
+- Phase 8G-B2 is reserved for approved text-only posting and must not begin automatically. Authentication alone must never enable publishing.
 
 ## Agent Architecture
 

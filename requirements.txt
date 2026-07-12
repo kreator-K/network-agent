@@ -7,3 +7,4 @@ pytest-mock
 mypy
 ruff
 mcp==1.28.1
+cryptography

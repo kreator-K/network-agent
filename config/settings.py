@@ -39,6 +39,12 @@ class Settings:
     google_calendar_timezone: str = os.getenv(
         "GOOGLE_CALENDAR_TIMEZONE", "America/New_York"
     )
+    linkedin_client_id: str = os.getenv("LINKEDIN_CLIENT_ID", "")
+    linkedin_client_secret: str = os.getenv("LINKEDIN_CLIENT_SECRET", "")
+    linkedin_redirect_uri: str = os.getenv("LINKEDIN_REDIRECT_URI", "")
+    linkedin_token_path: str = os.getenv("LINKEDIN_TOKEN_PATH", "secrets/linkedin-tokens.enc")
+    linkedin_token_encryption_key: str = os.getenv("LINKEDIN_TOKEN_ENCRYPTION_KEY", "")
+    linkedin_publish_mode: str = os.getenv("LINKEDIN_PUBLISH_MODE", "disabled")
     followup_cadence_days: int = int(os.getenv("FOLLOWUP_CADENCE_DAYS", "21"))
     database_path: str = os.getenv("DATABASE_PATH", "network_agent.db")
     generate_image_for_draft_posts: bool = _env_bool(
