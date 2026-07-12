@@ -7,6 +7,7 @@ make a network request. A ready session/tool caller is injected by the caller.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -63,7 +64,6 @@ class GoogleCalendarMCPClient:
                 "Google Calendar MCP session is unavailable."
             )
         payload = {
-            "account": settings.google_calendar_account,
             "calendarId": calendar_id,
             "summary": summary,
             "description": description,
@@ -72,6 +72,9 @@ class GoogleCalendarMCPClient:
             "timeZone": timezone,
             "sendUpdates": "none",
         }
+        account = settings.google_calendar_account.strip()
+        if account:
+            payload["account"] = account
         try:
             response = await self.session.call_tool("create-event", arguments=payload)
         except GoogleCalendarMCPError:
@@ -108,7 +111,10 @@ def _parse_result(response: Any) -> CalendarEventResult:
     if response is None:
         raise GoogleCalendarMCPUnavailableError("Google Calendar MCP returned no response.")
     if bool(getattr(response, "isError", False)):
-        raise GoogleCalendarMCPResponseError("Google Calendar MCP returned an error result.")
+        detail = _safe_error_detail(response)
+        raise GoogleCalendarMCPResponseError(
+            f"Google Calendar MCP returned an error result: {detail}"
+        )
 
     candidates: list[dict[str, Any]] = []
     structured = getattr(response, "structuredContent", None)
@@ -126,14 +132,37 @@ def _parse_result(response: Any) -> CalendarEventResult:
             candidates.append(parsed)
 
     for candidate in candidates:
-        event_id = candidate.get("id") or candidate.get("eventId")
+        event = candidate.get("event")
+        event_data = event if isinstance(event, dict) else candidate
+        event_id = event_data.get("id") or event_data.get("eventId")
         if isinstance(event_id, str) and event_id.strip():
-            html_link = candidate.get("htmlLink", candidate.get("html_link"))
+            html_link = event_data.get("htmlLink", event_data.get("html_link"))
             return CalendarEventResult(
                 event_id=event_id,
                 html_link=html_link if isinstance(html_link, str) else None,
-                status=str(candidate.get("status") or "created"),
+                status=str(event_data.get("status") or "created"),
             )
     raise GoogleCalendarMCPResponseError(
         "Google Calendar MCP response did not include a valid event ID."
     )
+
+
+def _safe_error_detail(response: Any) -> str:
+    """Extract a bounded provider message without retaining credential-like data."""
+    values: list[str] = []
+    structured = getattr(response, "structuredContent", None)
+    if isinstance(structured, dict):
+        values.append(json.dumps(structured, separators=(",", ":"), default=str))
+    for item in getattr(response, "content", []) or []:
+        text = getattr(item, "text", None)
+        if isinstance(text, str):
+            values.append(text)
+    detail = " | ".join(values).strip() or "no provider details"
+    detail = re.sub(
+        r"(?i)(access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|authorization)"
+        r"\s*[:=]\s*[^,;\s}]+",
+        r"\1=[REDACTED]",
+        detail,
+    )
+    detail = re.sub(r"(?i)bearer\s+[A-Za-z0-9._~-]+", "Bearer [REDACTED]", detail)
+    return detail[:500]

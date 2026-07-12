@@ -3,10 +3,12 @@
 from datetime import datetime, timezone
 import asyncio
 from typing import Any
+from types import SimpleNamespace
 
 import pytest
 from mcp.types import CallToolResult, TextContent
 
+from integrations import google_calendar_mcp_client as client_module
 from integrations.google_calendar_mcp_client import (
     GoogleCalendarMCPClient,
     GoogleCalendarMCPResponseError,
@@ -61,8 +63,7 @@ def test_success_and_exact_tool_payload() -> None:
     assert result.html_link == "https://calendar.google/e/1"
     assert result.status == "confirmed"
     assert name == "create-event"
-    assert set(payload) == {"account", "calendarId", "summary", "description", "start", "end", "timeZone", "sendUpdates"}
-    assert payload["account"] == "normal"
+    assert set(payload) == {"calendarId", "summary", "description", "start", "end", "timeZone", "sendUpdates"}
     assert "attendees" not in payload
     assert payload["sendUpdates"] == "none"
     assert payload["start"].endswith("+00:00") and payload["end"].endswith("+00:00")
@@ -116,6 +117,45 @@ def test_json_text_fallback_and_html_alias() -> None:
     result = _run(_create(FakeSession(response)))
     assert result.event_id == "evt-2"
     assert result.html_link == "mock://event"
+
+
+def test_explicit_account_is_trimmed_and_included(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client_module, "settings", SimpleNamespace(google_calendar_account=" work "))
+    session = FakeSession(_result(id="evt-account"))
+    _run(_create(session))
+    assert session.calls[0][1]["account"] == "work"
+
+
+def test_blank_account_is_omitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client_module, "settings", SimpleNamespace(google_calendar_account="   "))
+    session = FakeSession(_result(id="evt-blank"))
+    _run(_create(session))
+    assert "account" not in session.calls[0][1]
+
+
+def test_nested_event_response_is_parsed() -> None:
+    result = _run(_create(FakeSession(_result(
+        event={"id": "evt-nested", "htmlLink": "mock://nested", "status": "confirmed"}
+    ))))
+    assert result.event_id == "evt-nested"
+    assert result.html_link == "mock://nested"
+    assert result.status == "confirmed"
+
+
+def test_nested_error_detail_is_preserved_and_redacted() -> None:
+    response = CallToolResult(
+        content=[TextContent(
+            type="text",
+            text="permission denied access_token=secret-value refresh_token=refresh-value",
+        )],
+        isError=True,
+    )
+    with pytest.raises(GoogleCalendarMCPResponseError) as exc_info:
+        _run(_create(FakeSession(response)))
+    message = str(exc_info.value)
+    assert "permission denied" in message
+    assert "secret-value" not in message
+    assert "refresh-value" not in message
 
 
 def test_invalid_text_is_rejected_cleanly() -> None:
