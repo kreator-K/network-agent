@@ -8,3 +8,4 @@ client_secret*.json
 credentials*.json
 token*.json
 *.pem
+vendor/google-calendar-mcp/node_modules/
