@@ -569,7 +569,7 @@ def test_check_personal_brand_profile_flags_hash_mismatch(tmp_path: Path) -> Non
     assert result["violations"][0]["type"] == "profile_hash_mismatch"
 
 
-def test_run_full_integrity_check_aggregates_all_nine_checks(tmp_path: Path) -> None:
+def test_run_full_integrity_check_aggregates_all_ten_checks(tmp_path: Path) -> None:
     database_path = _database_path(tmp_path)
     prospect_id = _insert_prospect(database_path, status="meeting_confirmed")
     _insert_meeting_interaction(database_path, prospect_id)
@@ -584,7 +584,7 @@ def test_run_full_integrity_check_aggregates_all_nine_checks(tmp_path: Path) -> 
     result = SystemIntegrityAgent().run_full_integrity_check(database_path)
 
     assert result["overall_passed"] is True
-    assert len(result["checks"]) == 9
+    assert len(result["checks"]) == 10
     assert [check["check"] for check in result["checks"]] == [
         "no_duplicate_active_meeting",
         "single_active_parameter_version",
@@ -595,6 +595,7 @@ def test_run_full_integrity_check_aggregates_all_nine_checks(tmp_path: Path) -> 
         "personal_brand_profile",
         "signal_integrity",
         "signal_scoring_and_opportunities",
+        "content_package_integrity",
     ]
     assert result["summary"] == "All integrity checks passed."
     assert isinstance(result["checked_at"], str)

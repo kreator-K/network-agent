@@ -290,10 +290,26 @@ CREATE TABLE IF NOT EXISTS content_posts (
     inspiration_source_notes TEXT,
     status TEXT NOT NULL DEFAULT 'draft',
     engagement_metric REAL,
+    opportunity_id INTEGER REFERENCES content_opportunities(id) ON DELETE SET NULL,
+    profile_version INTEGER REFERENCES personal_brand_profile(version),
+    scoring_config_version INTEGER REFERENCES signal_scoring_config(version),
+    package_version INTEGER NOT NULL DEFAULT 1,
+    package_json TEXT,
+    source_references_json TEXT,
+    factual_claims_json TEXT,
+    alternative_hooks_json TEXT,
+    personal_angle_json TEXT,
+    risk_assessment_json TEXT,
+    suggested_first_comment TEXT,
+    suggested_hashtags_json TEXT,
+    image_brief_json TEXT,
+    image_alt_text TEXT,
+    approved_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (image_source IN ('uploaded', 'generated', 'none')),
-    CHECK (status IN ('draft', 'saved', 'approved_for_later_posting', 'discarded'))
+    CHECK (status IN ('draft', 'saved', 'needs_confirmation', 'approved_for_later_posting', 'rejected', 'discarded')),
+    CHECK (package_version >= 1)
 );
 
 CREATE TABLE IF NOT EXISTS calendar_blocks (

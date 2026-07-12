@@ -72,6 +72,12 @@ async def start(update: Any, context: Any) -> None:
                 "/ranked_signals",
                 "/content_opportunities",
                 "/content_opportunity <opportunity_id>",
+                "/prepare_content <opportunity_id>",
+                "/content_packages",
+                "/content_package <post_id>",
+                "/content_sources <post_id>",
+                "/content_claims <post_id>",
+                "/revise_content <post_id> <revision_type>",
                 "/record_outcome <outreach|content> <id> <outcome> [notes]",
                 "/suggest_refinements",
                 "/refinement_status",
@@ -564,6 +570,85 @@ async def content_opportunity(update: Any, context: Any) -> None:
     await _reply(update, _format_content_opportunity(item, detailed=True), reply_markup=_opportunity_markup(opportunity_id))
 
 
+async def prepare_content(update: Any, context: Any) -> None:
+    """Prepare a review package from a stored opportunity; never publish it."""
+    opportunity_id = _parse_int(_command_payload(update).strip(), "opportunity_id")
+    if opportunity_id is None:
+        await _reply(update, "Usage: /prepare_content <opportunity_id>")
+        return
+    try:
+        post = _orchestrator(context).generate_content_package(opportunity_id=opportunity_id, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not prepare that content package. Check the opportunity ID and its review state.")
+        return
+    await _reply(update, _format_content_package(post), reply_markup=_package_markup(post["id"]))
+
+
+async def content_packages(update: Any, context: Any) -> None:
+    """List package-backed drafts awaiting a human decision."""
+    try:
+        packages = _orchestrator(context).list_pending_content_packages(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load content packages.")
+        return
+    if not packages:
+        await _reply(update, "No content packages are awaiting review.")
+        return
+    await _reply(update, "\n".join(f"#{item['id']}: {item.get('topic') or 'Content package'} | {item['status']} | v{item['package_version']} | image={item['image_source']}" for item in packages))
+
+
+async def content_package(update: Any, context: Any) -> None:
+    """Show one package draft and its review controls."""
+    post_id = _parse_int(_command_payload(update).strip(), "post_id")
+    if post_id is None:
+        await _reply(update, "Usage: /content_package <post_id>")
+        return
+    try:
+        post = _orchestrator(context).get_content_package(post_id=post_id, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, f"Could not find content package id={post_id}.")
+        return
+    await _reply(update, _format_content_package(post), reply_markup=_package_markup(post_id))
+
+
+async def content_sources(update: Any, context: Any) -> None:
+    """Display safe stored source attribution for one package."""
+    await _show_package_json(update, context, "source_references_json", "Sources")
+
+
+async def content_claims(update: Any, context: Any) -> None:
+    """Display stored factual-claim validation records for one package."""
+    await _show_package_json(update, context, "factual_claims_json", "Factual claims")
+
+
+async def revise_content(update: Any, context: Any) -> None:
+    """Route a tightly scoped content revision through the orchestrator."""
+    parts = _command_payload(update).split(maxsplit=2)
+    post_id = _parse_int(parts[0], "post_id") if parts else None
+    if post_id is None or len(parts) < 2:
+        await _reply(update, "Usage: /revise_content <post_id> <revision_type> [notes]")
+        return
+    try:
+        post = _orchestrator(context).revise_content_package(post_id=post_id, revision_type=parts[1], database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not revise that package. Check the ID and revision type.")
+        return
+    await _reply(update, _format_content_package(post), reply_markup=_package_markup(post_id))
+
+
+async def _show_package_json(update: Any, context: Any, field: str, label: str) -> None:
+    post_id = _parse_int(_command_payload(update).strip(), "post_id")
+    if post_id is None:
+        await _reply(update, f"Usage: /{'content_sources' if field == 'source_references_json' else 'content_claims'} <post_id>")
+        return
+    try:
+        post = _orchestrator(context).get_content_package(post_id=post_id, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, f"Could not find content package id={post_id}.")
+        return
+    await _reply(update, f"{label}:\n{post.get(field) or 'None'}")
+
+
 async def record_outcome(update: Any, context: Any) -> None:
     """Record an explicit user-reported outcome for refinement."""
     parsed = _parse_record_outcome_payload(_command_payload(update))
@@ -826,6 +911,9 @@ async def button_callback(update: Any, context: Any) -> None:
             )
             return
         await query.edit_message_text("Discarded draft.")
+        return
+    if data.startswith("package_"):
+        await _handle_package_callback(query, context, data)
         return
     if data.startswith("opportunity_"):
         await _handle_opportunity_callback(query, context, data)
@@ -1197,6 +1285,74 @@ def _format_content_opportunity(item: dict[str, Any], detailed: bool = False) ->
             "No post has been drafted yet.",
         ])
     return "\n".join(lines)
+
+
+def _format_content_package(post: dict[str, Any]) -> str:
+    hooks = _json_list(post.get("alternative_hooks_json"))
+    claims = _json_list(post.get("factual_claims_json"))
+    return "\n".join([
+        f"Content package #{post.get('id')} | {post.get('status')} | v{post.get('package_version')}",
+        post.get("draft_text") or "",
+        "Alternative hooks: " + "; ".join(str(hook.get("text", "")) for hook in hooks),
+        f"Unresolved claims: {sum(bool(item.get('confirmation_required')) for item in claims if isinstance(item, dict))}",
+        f"Image: {post.get('image_source')} | Alt text: {post.get('image_alt_text') or '-'}",
+        "Nothing has been published.",
+    ])
+
+
+def _package_markup(post_id: Any) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Save Draft", callback_data=f"package_save:{post_id}"), InlineKeyboardButton("Approve for Later Posting", callback_data=f"package_approve:{post_id}"), InlineKeyboardButton("Reject", callback_data=f"package_reject:{post_id}")],
+        [InlineKeyboardButton("View Sources", callback_data=f"package_sources:{post_id}"), InlineKeyboardButton("View Claims", callback_data=f"package_claims:{post_id}"), InlineKeyboardButton("Make More Personal", callback_data=f"package_personal:{post_id}")],
+        [InlineKeyboardButton("Make More Analytical", callback_data=f"package_analytical:{post_id}"), InlineKeyboardButton("Make More Concise", callback_data=f"package_concise:{post_id}"), InlineKeyboardButton("Make Funnier", callback_data=f"package_funny:{post_id}")],
+    ])
+
+
+async def _handle_package_callback(query: Any, context: Any, data: str) -> None:
+    parts = data.split(":", 1)
+    post_id = _parse_int(parts[1], "post_id") if len(parts) == 2 else None
+    if post_id is None:
+        await query.edit_message_text("Invalid or stale content package action.")
+        return
+    action = parts[0]
+    try:
+        orchestrator = _orchestrator(context)
+        if action == "package_save":
+            orchestrator.save_content_draft(post_id=post_id, database=_database(context))
+            message = "Content package saved. Nothing has been published."
+        elif action == "package_approve":
+            result = orchestrator.approve_content_package_for_later(
+                post_id=post_id, database=_database(context)
+            )
+            message = result["message"]
+        elif action == "package_reject":
+            orchestrator.reject_content_package(post_id=post_id, database=_database(context))
+            message = "Content package rejected. Nothing has been published."
+        elif action in {"package_personal", "package_analytical", "package_concise", "package_funny"}:
+            revision = {"package_personal": "make_more_personal", "package_analytical": "make_more_analytical", "package_concise": "make_more_concise", "package_funny": "make_funnier"}[action]
+            post = orchestrator.revise_content_package(
+                post_id=post_id, revision_type=revision, database=_database(context)
+            )
+            await query.edit_message_text(_format_content_package(post))
+            return
+        elif action in {"package_sources", "package_claims"}:
+            post = orchestrator.get_content_package(
+                post_id=post_id, database=_database(context)
+            )
+            field = (
+                "source_references_json"
+                if action == "package_sources"
+                else "factual_claims_json"
+            )
+            await query.edit_message_text(post.get(field) or "None")
+            return
+        else:
+            await query.edit_message_text("Invalid or stale content package action.")
+            return
+    except NetworkOrchestratorError:
+        await query.edit_message_text("That content package is unavailable or cannot make that transition.")
+        return
+    await query.edit_message_text(message)
 
 
 async def _handle_opportunity_callback(query: Any, context: Any, data: str) -> None:

@@ -854,6 +854,53 @@ class NetworkOrchestrator:
             method_name="save_content_draft",
         )
 
+    def generate_content_package(self, opportunity_id: int, *, database: sqlite3.Connection | DatabaseRef, image_mode: str = "disabled") -> dict[str, Any]:
+        """Prepare a review-only package from a stored opportunity; never publish it."""
+        try:
+            return self.content_inspiration_agent.generate_package_from_opportunity(
+                opportunity_id, database, image_mode
+            ).model_dump()
+        except Exception as exc:
+            _raise_with_context("generate_content_package", {"opportunity_id": opportunity_id}, exc)
+
+    def get_content_package(self, post_id: int, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        """Load one package-backed draft for Telegram review."""
+        try:
+            return self.content_inspiration_agent.get_package(post_id, database).model_dump()
+        except Exception as exc:
+            _raise_with_context("get_content_package", {"post_id": post_id}, exc)
+
+    def list_pending_content_packages(self, *, database: sqlite3.Connection | DatabaseRef) -> list[dict[str, Any]]:
+        """List existing package drafts without making a post."""
+        try:
+            return [post.model_dump() for post in self.content_inspiration_agent.get_pending_drafts(database) if post.package_json]
+        except Exception as exc:
+            _raise_with_context("list_pending_content_packages", {}, exc)
+
+    def approve_content_package_for_later(self, post_id: int, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        """Approve internally only after deterministic package validation."""
+        try:
+            post = self.content_inspiration_agent.get_package(post_id, database)
+            blockers = self.content_inspiration_agent.validate_package_for_approval(post)
+            if blockers:
+                raise ValueError("; ".join(blockers))
+            result = self._update_content_post_status(post_id, "approved_for_later_posting", database=database, method_name="approve_content_package_for_later")
+            return {**result, "message": "Approved for later posting. Nothing has been published."}
+        except Exception as exc:
+            _raise_with_context("approve_content_package_for_later", {"post_id": post_id}, exc)
+
+    def reject_content_package(self, post_id: int, reason: str | None = None, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        """Reject a package without touching LinkedIn or its source opportunity."""
+        _ = reason
+        return self._update_content_post_status(post_id, "discarded", database=database, method_name="reject_content_package")
+
+    def revise_content_package(self, post_id: int, revision_type: str, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        """Run a controlled revision that preserves package provenance."""
+        try:
+            return self.content_inspiration_agent.revise_package(post_id, revision_type, database).model_dump()
+        except Exception as exc:
+            _raise_with_context("revise_content_package", {"post_id": post_id, "revision_type": revision_type}, exc)
+
     def approve_content_draft_for_later_posting(
         self,
         post_id: int,

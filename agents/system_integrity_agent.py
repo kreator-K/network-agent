@@ -605,6 +605,33 @@ class SystemIntegrityAgent:
             violations.append({"type": "duplicate_active_opportunity", "primary_signal_id": row["primary_signal_id"]})
         return _result("signal_scoring_and_opportunities", violations)
 
+    def check_content_package_integrity(self, database: DatabaseRef) -> dict[str, Any]:
+        """Check content packages remain source-traced, review-only artifacts."""
+        connection, should_close = _coerce_connection(database)
+        try:
+            rows = _fetch_dicts(connection, "SELECT * FROM content_posts WHERE package_json IS NOT NULL")
+        finally:
+            if should_close:
+                connection.close()
+        violations: list[dict[str, Any]] = []
+        for row in rows:
+            post_id = row["id"]
+            if row["opportunity_id"] is None or row["profile_version"] is None or row["scoring_config_version"] is None:
+                violations.append({"type": "package_missing_provenance", "post_id": post_id})
+            references = _json_object(row["package_json"]).get("source_references", [])
+            if not isinstance(references, list) or not references:
+                violations.append({"type": "package_missing_sources", "post_id": post_id})
+            for claim in _json_object(row["package_json"]).get("factual_claims", []):
+                if not isinstance(claim, dict) or not claim.get("source_signal_ids"):
+                    violations.append({"type": "package_claim_missing_sources", "post_id": post_id})
+                if row["status"] == "approved_for_later_posting" and claim.get("confirmation_required"):
+                    violations.append({"type": "approved_package_has_unresolved_claim", "post_id": post_id})
+            if row["image_source"] != "none" and not row["image_alt_text"]:
+                violations.append({"type": "package_image_missing_alt_text", "post_id": post_id})
+            if row["status"] not in {"draft", "saved", "needs_confirmation", "approved_for_later_posting", "rejected", "discarded"}:
+                violations.append({"type": "package_invalid_phase_status", "post_id": post_id})
+        return _result("content_package_integrity", violations)
+
     def run_full_integrity_check(self, database: DatabaseRef) -> dict[str, Any]:
         """Run all integrity checks and summarize the result."""
         checks = [
@@ -617,6 +644,7 @@ class SystemIntegrityAgent:
             self.check_personal_brand_profile(database),
             self.check_signal_integrity(database),
             self.check_signal_scoring_and_opportunities(database),
+            self.check_content_package_integrity(database),
         ]
         overall_passed = all(bool(check["passed"]) for check in checks)
         failed_count = sum(1 for check in checks if not check["passed"])

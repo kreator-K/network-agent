@@ -37,6 +37,11 @@ class Settings:
         "GENERATE_IMAGE_FOR_DRAFT_POSTS",
         False,
     )
+    image_mode: str = os.getenv("IMAGE_MODE", "disabled")
+    auto_generate_content_images: bool = _env_bool("AUTO_GENERATE_CONTENT_IMAGES", False)
+    default_content_image_aspect_ratio: str = os.getenv("DEFAULT_CONTENT_IMAGE_ASPECT_RATIO", "1:1")
+    max_image_generations_per_package: int = int(os.getenv("MAX_IMAGE_GENERATIONS_PER_PACKAGE", "1"))
+    image_provider_timeout_seconds: int = int(os.getenv("IMAGE_PROVIDER_TIMEOUT_SECONDS", "30"))
     public_signal_allow_http: bool = _env_bool("PUBLIC_SIGNAL_ALLOW_HTTP", False)
     public_signal_connect_timeout_seconds: int = int(
         os.getenv("PUBLIC_SIGNAL_CONNECT_TIMEOUT_SECONDS", "5")

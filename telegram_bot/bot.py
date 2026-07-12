@@ -80,6 +80,12 @@ def build_bot() -> Application:
     application.add_handler(
         CommandHandler("content_opportunity", handlers.content_opportunity)
     )
+    application.add_handler(CommandHandler("prepare_content", handlers.prepare_content))
+    application.add_handler(CommandHandler("content_packages", handlers.content_packages))
+    application.add_handler(CommandHandler("content_package", handlers.content_package))
+    application.add_handler(CommandHandler("content_sources", handlers.content_sources))
+    application.add_handler(CommandHandler("content_claims", handlers.content_claims))
+    application.add_handler(CommandHandler("revise_content", handlers.revise_content))
     application.add_handler(CommandHandler("record_outcome", handlers.record_outcome))
     application.add_handler(
         CommandHandler("suggest_refinements", handlers.suggest_refinements)
