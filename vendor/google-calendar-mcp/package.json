@@ -1,0 +1,8 @@
+{
+  "name": "network-agent-google-calendar-mcp-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@cocal/google-calendar-mcp": "2.6.2"
+  }
+}

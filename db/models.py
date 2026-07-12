@@ -28,7 +28,9 @@ ContentPostImageSource = Literal["uploaded", "generated", "none"]
 ContentPostStatus = Literal[
     "draft",
     "saved",
+    "needs_confirmation",
     "approved_for_later_posting",
+    "rejected",
     "discarded",
 ]
 SignalSourceType = Literal["rss", "atom", "auto_feed"]
@@ -360,6 +362,135 @@ class ContentPost(DataLayerModel):
     inspiration_source_notes: str | None = None
     status: ContentPostStatus = "draft"
     engagement_metric: float | None = None
+    opportunity_id: int | None = None
+    profile_version: int | None = Field(default=None, ge=1)
+    scoring_config_version: int | None = Field(default=None, ge=1)
+    package_version: int = Field(default=1, ge=1)
+    package_json: str | None = None
+    source_references_json: str | None = None
+    factual_claims_json: str | None = None
+    alternative_hooks_json: str | None = None
+    personal_angle_json: str | None = None
+    risk_assessment_json: str | None = None
+    suggested_first_comment: str | None = None
+    suggested_hashtags_json: str | None = None
+    image_brief_json: str | None = None
+    image_alt_text: str | None = None
+    approved_at: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class AlternativeHook(BaseModel):
+    """Meaningfully distinct opening hook for a content package."""
+
+    text: str = Field(min_length=1, max_length=400)
+    rationale: str = Field(min_length=1, max_length=500)
+
+
+class FactualClaim(BaseModel):
+    """Traceable factual statement used by a package."""
+
+    id: str = Field(min_length=1, max_length=80)
+    claim_text: str = Field(min_length=1, max_length=1000)
+    source_signal_ids: list[int] = Field(min_length=1)
+    confidence: float = Field(ge=0, le=1)
+    directly_supported: bool
+    confirmation_required: bool = False
+    softened: bool = False
+    risk_note: str | None = None
+
+
+class PersonalAngle(BaseModel):
+    """Explicit personal-context basis, never an inferred achievement."""
+
+    angle_type: Literal["verified_experience", "professional_identity", "learning_perspective", "curious_observation", "analytical_interpretation", "humorous_observation", "no_personal_angle"]
+    text: str = Field(min_length=1, max_length=1000)
+    verified: bool = False
+    confirmation_required: bool = False
+
+
+class ImageBrief(BaseModel):
+    """Safe visual direction that contains no deceptive imagery request."""
+
+    objective: str = Field(min_length=1, max_length=500)
+    visual_idea: str = Field(min_length=1, max_length=1000)
+    aspect_ratio: str = Field(default="1:1", max_length=20)
+    safety_notes: list[str] = Field(default_factory=list)
+
+
+class ContentRiskAssessment(BaseModel):
+    """Review-facing content-risk state."""
+
+    factual_risk: float = Field(ge=0, le=100)
+    generic_content_risk: float = Field(ge=0, le=100)
+    notes: list[str] = Field(default_factory=list)
+    validation_passed: bool = True
+
+
+class ContentPackage(BaseModel):
+    """Typed approval-ready package stored in a `content_posts` record."""
+
+    opportunity_id: int
+    primary_post: str = Field(min_length=1, max_length=6000)
+    alternative_hooks: list[AlternativeHook] = Field(min_length=2, max_length=3)
+    target_audience: str = Field(min_length=1)
+    recommended_format: str = Field(min_length=1)
+    content_treatment: str = Field(min_length=1)
+    source_references: list[dict[str, Any]] = Field(min_length=1)
+    factual_claims: list[FactualClaim] = Field(default_factory=list)
+    personal_angle: PersonalAngle
+    claims_requiring_confirmation: list[str] = Field(default_factory=list)
+    image_brief: ImageBrief | None = None
+    image_alt_text: str | None = None
+    suggested_first_comment: str | None = None
+    suggested_hashtags: list[str] = Field(default_factory=list)
+    risk_assessment: ContentRiskAssessment
+    why_it_fits_profile: str = Field(min_length=1)
+    profile_version: int = Field(ge=1)
+    scoring_config_version: int = Field(ge=1)
+    package_version: int = Field(ge=1)
+
+
+class BriefingRun(DataLayerModel):
+    """Auditable proactive briefing execution record."""
+    id: int | None = None
+    run_key: str
+    run_type: Literal["scheduled", "manual", "retry"]
+    scheduled_for: str
+    timezone: str
+    started_at: str
+    completed_at: str | None = None
+    status: Literal["started", "completed", "completed_with_warnings", "no_content", "failed", "skipped", "delivery_failed"]
+    telegram_delivery_status: str = "not_requested"
+    telegram_message_ids_json: str = "[]"
+    metadata_json: str = "{}"
+    created_at: str
+
+
+class ProspectCandidate(DataLayerModel):
+    """Source-backed public professional candidate pending explicit CRM approval."""
+    id: int | None = None
+    full_name: str = Field(min_length=1)
+    normalized_name: str
+    role_title: str | None = None
+    company: str | None = None
+    location: str | None = None
+    public_profile_url: str | None = None
+    professional_summary: str | None = None
+    source_signal_ids_json: str
+    source_references_json: str
+    relevant_topics_json: str = "[]"
+    recommended_ask_type: Literal["resume_review", "career_guidance", "general_chat"]
+    recommended_rationale: str
+    profile_version: int = Field(ge=1)
+    scoring_config_version: int = Field(ge=1)
+    score_json: str
+    total_score: float = Field(ge=0, le=100)
+    confidence: float = Field(ge=0, le=1)
+    source_credibility_score: float = Field(ge=0, le=100)
+    matching_prospect_id: int | None = None
+    status: Literal["discovered", "shortlisted", "saved", "approved", "added_to_crm", "skipped", "rejected", "duplicate", "expired", "failed_validation"] = "discovered"
     created_at: str
     updated_at: str
 

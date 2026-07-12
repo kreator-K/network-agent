@@ -44,6 +44,7 @@ def initialize_database(
         _migrate_interactions_lifecycle_columns(connection)
         _migrate_content_posts_uploaded_image_source(connection)
         _migrate_content_posts_lifecycle_columns(connection)
+        _migrate_content_package_columns(connection)
         _migrate_refinement_outcomes_explicit_columns(connection)
         _migrate_calendar_block_lifecycle_columns(connection)
         _migrate_signal_scoring_columns(connection)
@@ -54,6 +55,10 @@ def initialize_database(
         seed_core_intent(connection, core_intent_path)
         seed_personal_brand_profile(connection, personal_brand_profile_path)
         seed_signal_scoring_config(connection, signal_scoring_config_path)
+        connection.execute(
+            "INSERT OR IGNORE INTO briefing_settings (id, updated_at) VALUES (1, ?)",
+            (_utc_now(),),
+        )
 
 
 def canonical_signal_scoring_config_json(config: dict[str, Any]) -> str:
@@ -596,7 +601,7 @@ def _migrate_content_posts_lifecycle_columns(connection: sqlite3.Connection) -> 
         or "updated_at" not in columns
         or "'drafted'" in sql
         or "'posted'" in sql
-        or "'rejected'" in sql
+        or ("'rejected'" in sql and "package_version" not in columns)
     )
     if not needs_rebuild:
         return
@@ -668,6 +673,33 @@ def _migrate_content_posts_lifecycle_columns(connection: sqlite3.Connection) -> 
             ON content_posts(status);
         """
     )
+
+
+def _migrate_content_package_columns(connection: sqlite3.Connection) -> None:
+    """Add nullable Phase 8D package fields without altering prior drafts."""
+    columns = _column_names(connection, "content_posts")
+    additions = {
+        "opportunity_id": "INTEGER",
+        "profile_version": "INTEGER",
+        "scoring_config_version": "INTEGER",
+        "package_version": "INTEGER NOT NULL DEFAULT 1",
+        "package_json": "TEXT",
+        "source_references_json": "TEXT",
+        "factual_claims_json": "TEXT",
+        "alternative_hooks_json": "TEXT",
+        "personal_angle_json": "TEXT",
+        "risk_assessment_json": "TEXT",
+        "suggested_first_comment": "TEXT",
+        "suggested_hashtags_json": "TEXT",
+        "image_brief_json": "TEXT",
+        "image_alt_text": "TEXT",
+        "approved_at": "TEXT",
+    }
+    for column_name, column_type in additions.items():
+        if column_name not in columns:
+            connection.execute(
+                f"ALTER TABLE content_posts ADD COLUMN {column_name} {column_type}"
+            )
 
 
 def _migrate_refinement_outcomes_explicit_columns(

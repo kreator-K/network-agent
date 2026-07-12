@@ -13,6 +13,8 @@ from db.models import Prospect, ProspectStatus, RefinementHistoryEntry
 
 
 EXPECTED_TABLES = [
+    "briefing_runs",
+    "briefing_settings",
     "calendar_blocks",
     "content_opportunities",
     "content_posts",
@@ -20,6 +22,7 @@ EXPECTED_TABLES = [
     "core_intent",
     "interactions",
     "personal_brand_profile",
+    "prospect_candidates",
     "prospects",
     "refinable_parameters",
     "refinement_history",
@@ -244,6 +247,21 @@ def test_content_posts_table_created_with_correct_columns(tmp_path: Path) -> Non
         "inspiration_source_notes",
         "status",
         "engagement_metric",
+        "opportunity_id",
+        "profile_version",
+        "scoring_config_version",
+        "package_version",
+        "package_json",
+        "source_references_json",
+        "factual_claims_json",
+        "alternative_hooks_json",
+        "personal_angle_json",
+        "risk_assessment_json",
+        "suggested_first_comment",
+        "suggested_hashtags_json",
+        "image_brief_json",
+        "image_alt_text",
+        "approved_at",
         "created_at",
         "updated_at",
     ]

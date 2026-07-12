@@ -235,6 +235,22 @@ class FakeOrchestrator:
         self.calls.append({"method": "get_signal", "kwargs": kwargs})
         return {"id": kwargs["signal_id"], "title": "Signal", "source_name": "Example", "status": "normalized"}
 
+    def get_briefing_status(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"method": "get_briefing_status", "kwargs": kwargs})
+        return {"enabled": False, "briefing_time": "08:30", "timezone": "America/New_York", "dry_run": False, "last_run": None}
+
+    def list_briefing_runs(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.calls.append({"method": "list_briefing_runs", "kwargs": kwargs})
+        return []
+
+    def build_daily_briefing(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"method": "build_daily_briefing", "kwargs": kwargs})
+        return {"run_id": 4, "status": "no_content", "scan": {"sources_scanned": 0, "new_signals": 0}, "scoring": {"scored": 0}, "packages": [], "followups": [], "dry_run": kwargs.get("dry_run", False)}
+
+    def update_briefing_settings(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"method": "update_briefing_settings", "kwargs": kwargs})
+        return {"enabled": kwargs.get("enabled", False), "briefing_time": kwargs.get("briefing_time", "08:30"), "timezone": "America/New_York"}
+
     def mark_outreach_sent(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append({"method": "mark_outreach_sent", "kwargs": kwargs})
         return {"status": "connection_sent", "prospect": FakeProspect(id=7, name="Ada")}
@@ -1257,3 +1273,25 @@ def test_handler_error_is_logged(caplog: Any) -> None:
         run_async(handlers.handle_error(FakeUpdate(message), context))
 
     assert "Telegram handler failed" in caplog.text
+
+
+def test_briefing_status_replies_when_disabled() -> None:
+    orchestrator = FakeOrchestrator()
+    message = FakeMessage("/briefing_status")
+    run_async(handlers.briefing_status(FakeUpdate(message), FakeContext(orchestrator)))
+    assert "disabled" in message.replies[0]["text"]
+    assert orchestrator.calls[0]["method"] == "get_briefing_status"
+
+
+def test_briefing_history_has_clean_empty_state() -> None:
+    message = FakeMessage("/briefing_history")
+    run_async(handlers.briefing_history(FakeUpdate(message), FakeContext(FakeOrchestrator())))
+    assert message.replies[0]["text"] == "No briefing runs have been recorded yet."
+
+
+def test_briefing_now_always_replies_for_manual_dry_run() -> None:
+    orchestrator = FakeOrchestrator()
+    message = FakeMessage("/briefing_now dry_run")
+    run_async(handlers.briefing_now(FakeUpdate(message), FakeContext(orchestrator)))
+    assert "Manual briefing" in message.replies[0]["text"]
+    assert orchestrator.calls[0]["kwargs"]["dry_run"] is True

@@ -70,8 +70,16 @@ async def start(update: Any, context: Any) -> None:
                 "/score_signal <signal_id>",
                 "/score_signals [limit]",
                 "/ranked_signals",
+                "/scoring_diagnostics",
+                "/scoring_queue [limit]",
                 "/content_opportunities",
                 "/content_opportunity <opportunity_id>",
+                "/prepare_content <opportunity_id>",
+                "/content_packages",
+                "/content_package <post_id>",
+                "/content_sources <post_id>",
+                "/content_claims <post_id>",
+                "/revise_content <post_id> <revision_type>",
                 "/record_outcome <outreach|content> <id> <outcome> [notes]",
                 "/suggest_refinements",
                 "/refinement_status",
@@ -79,9 +87,146 @@ async def start(update: Any, context: Any) -> None:
                 "/rollback_refinement <refinement_id>",
                 "/refinement_history",
                 "/system_check",
+                "/briefing_now [dry_run]",
+                "/scan_now",
+                "/briefing_status",
+                "/briefing_history",
+                "/briefing_run <run_id>",
+                "/daily_briefing on|off|time <HH:MM>",
+                "/discover_candidates",
+                "/prospect_candidates",
+                "/approve_candidate <candidate_id>",
             ]
         ),
     )
+
+
+async def briefing_now(update: Any, context: Any) -> None:
+    """Run one manual briefing; scheduled-disabled state never suppresses a reply."""
+    logger.info("briefing_now command received")
+    dry_run = _command_payload(update).strip().lower() == "dry_run"
+    try:
+        result = _orchestrator(context).build_daily_briefing(
+            database=_database(context), run_type="manual", dry_run=dry_run
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not build a briefing right now. Check the bot logs for details.")
+        return
+    if result.get("status") == "skipped":
+        await _reply(update, "A briefing already ran for this window. No duplicate work was created.")
+        return
+    await _reply(update, _format_briefing_result(result))
+
+
+async def briefing_status(update: Any, context: Any) -> None:
+    """Show briefing configuration and latest run, including disabled state."""
+    logger.info("briefing_status command received")
+    try:
+        result = _orchestrator(context).get_briefing_status(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Briefing configuration is unavailable. Check database initialization and bot logs.")
+        return
+    last = result.get("last_run")
+    last_text = "No briefing runs have been recorded yet." if last is None else f"Last run: #{last.get('id')} {last.get('status')}"
+    await _reply(update, f"Briefing status: {'enabled' if result['enabled'] else 'disabled'}\nTime: {result['briefing_time']} ({result['timezone']})\nDry run: {result['dry_run']}\n{last_text}")
+
+
+async def briefing_history(update: Any, context: Any) -> None:
+    """Show recent briefing executions with a clean empty state."""
+    logger.info("briefing_history command received")
+    try:
+        runs = _orchestrator(context).list_briefing_runs(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load briefing history. Check the bot logs for details.")
+        return
+    if not runs:
+        await _reply(update, "No briefing runs have been recorded yet.")
+        return
+    await _reply(update, "\n".join(f"#{run['id']} {run['run_type']} | {run['status']} | packages={run['packages_prepared_count']}" for run in runs))
+
+
+async def briefing_run(update: Any, context: Any) -> None:
+    """Show one stored run summary."""
+    run_id = _parse_int(_command_payload(update).strip(), "run_id")
+    if run_id is None:
+        await _reply(update, "Usage: /briefing_run <run_id>")
+        return
+    try:
+        runs = _orchestrator(context).list_briefing_runs(database=_database(context), limit=100)
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load that briefing run.")
+        return
+    run = next((item for item in runs if item["id"] == run_id), None)
+    if run is None:
+        await _reply(update, f"No briefing run found for id={run_id}.")
+        return
+    await _reply(update, f"Briefing #{run_id}: {run['status']}\nSources: {run['sources_succeeded_count']}\nNew signals: {run['new_signals_count']}\nScored: {run['signals_scored_count']}\nPackages: {run['packages_prepared_count']}\nFollow-ups: {run['followups_due_count']}")
+
+
+async def scan_now(update: Any, context: Any) -> None:
+    """Perform ingestion only; no scoring, briefing, or package preparation."""
+    try:
+        result = _orchestrator(context).scan_enabled_signal_sources(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not scan enabled sources right now.")
+        return
+    await _reply(update, f"Scan complete. Sources: {result['sources_scanned']}. New signals: {result['new_signals']}. Duplicates: {result['duplicates']}. Failures: {result['failures']}.")
+
+
+async def daily_briefing(update: Any, context: Any) -> None:
+    """Change persistent configuration only; this never launches a scheduler."""
+    payload = _command_payload(update).strip().split()
+    if not payload:
+        await _reply(update, "Usage: /daily_briefing on|off|time <HH:MM>")
+        return
+    try:
+        if payload[0] == "on":
+            result = _orchestrator(context).update_briefing_settings(enabled=True, database=_database(context))
+        elif payload[0] == "off":
+            result = _orchestrator(context).update_briefing_settings(enabled=False, database=_database(context))
+        elif payload[0] == "time" and len(payload) == 2:
+            result = _orchestrator(context).update_briefing_settings(briefing_time=payload[1], database=_database(context))
+        else:
+            await _reply(update, "Usage: /daily_briefing on|off|time <HH:MM>")
+            return
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not update briefing configuration.")
+        return
+    await _reply(update, f"Briefing configuration saved: {'enabled' if result['enabled'] else 'disabled'}, {result['briefing_time']} {result['timezone']}.")
+
+
+async def discover_candidates(update: Any, context: Any) -> None:
+    """Create review-only candidates from stored public signal metadata."""
+    try:
+        candidates = _orchestrator(context).discover_prospect_candidates(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not discover source-backed candidates right now.")
+        return
+    await _reply(update, "No new candidates found in stored approved signals." if not candidates else "\n".join(f"Candidate #{item['id']}: {item['full_name']} | score {item['total_score']:.0f} | {item['recommended_rationale']}" for item in candidates))
+
+
+async def prospect_candidates(update: Any, context: Any) -> None:
+    """List review-only prospect candidates without CRM insertion."""
+    try:
+        candidates = _orchestrator(context).list_prospect_candidates(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load prospect candidates.")
+        return
+    await _reply(update, "No prospect candidates have been recorded yet." if not candidates else "\n".join(f"#{item['id']} {item['full_name']} | {item['status']} | score {item['total_score']:.0f}" for item in candidates))
+
+
+async def approve_candidate(update: Any, context: Any) -> None:
+    """Explicitly approve a candidate for CRM insertion; no outreach is sent."""
+    candidate_id = _parse_int(_command_payload(update).strip(), "candidate_id")
+    if candidate_id is None:
+        await _reply(update, "Usage: /approve_candidate <candidate_id>")
+        return
+    try:
+        result = _orchestrator(context).approve_prospect_candidate(candidate_id, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not approve that candidate. Check the candidate ID and status.")
+        return
+    await _reply(update, f"Candidate approved and added to CRM as prospect #{_get_value(result['prospect'], 'id')}. No outreach was sent.")
 
 
 async def add_prospect(update: Any, context: Any) -> None:
@@ -499,9 +644,10 @@ async def signal(update: Any, context: Any) -> None:
 
 async def score_signal(update: Any, context: Any) -> None:
     """Score one stored signal; this command never scans a source."""
-    signal_id = _parse_int(_command_payload(update).strip(), "signal_id")
+    parts = _command_payload(update).strip().split()
+    signal_id = _parse_int(parts[0], "signal_id") if parts else None
     if signal_id is None:
-        await _reply(update, "Usage: /score_signal <signal_id>")
+        await _reply(update, "Usage: /score_signal <signal_id> [force]")
         return
     try:
         result = _orchestrator(context).score_signal(signal_id=signal_id, database=_database(context))
@@ -513,17 +659,34 @@ async def score_signal(update: Any, context: Any) -> None:
 
 async def score_signals(update: Any, context: Any) -> None:
     """Run a bounded scoring pass over existing normalized signals only."""
-    payload = _command_payload(update).strip()
-    limit = 10 if not payload else _parse_int(payload, "limit")
+    parts = _command_payload(update).strip().split()
+    force = "force" in parts
+    numeric = [part for part in parts if part != "force"]
+    limit = 10 if not numeric else _parse_int(numeric[0], "limit")
     if limit is None or limit < 1:
         await _reply(update, "Usage: /score_signals [positive_limit]")
         return
     try:
-        result = _orchestrator(context).score_recent_signals(limit=limit, database=_database(context))
+        result = _orchestrator(context).score_recent_signals(limit=limit, force=force, database=_database(context))
     except NetworkOrchestratorError:
         await _reply(update, "Could not score stored signals right now.")
         return
     await _reply(update, _format_scoring_run(result))
+
+
+async def scoring_queue(update: Any, context: Any) -> None:
+    """Display the next publication-first candidates without scoring them."""
+    payload = _command_payload(update).strip()
+    limit = 10 if not payload else _parse_int(payload, "limit")
+    if limit is None or limit < 1:
+        await _reply(update, "Usage: /scoring_queue [positive_limit]")
+        return
+    try:
+        queue = _orchestrator(context).get_scoring_queue(limit=limit, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load the scoring queue.")
+        return
+    await _reply(update, "No normalized signals are waiting for evaluation." if not queue else "\n".join(f"#{item['signal_id']} | {item['published_at'] or 'no publication date'} | age {item['age_days'] if item['age_days'] is not None else '?'} days | {item['title']} | {item['queue_reason']}" for item in queue))
 
 
 async def ranked_signals(update: Any, context: Any) -> None:
@@ -533,7 +696,19 @@ async def ranked_signals(update: Any, context: Any) -> None:
     except NetworkOrchestratorError:
         await _reply(update, "Could not load ranked signals.")
         return
-    await _reply(update, _format_ranked_signals(ranked) if ranked else "No scored signals yet.")
+    await _reply(update, _format_ranked_signals(ranked) if ranked else "No ranked eligible signals yet.")
+
+
+async def scoring_diagnostics(update: Any, context: Any) -> None:
+    """Show read-only scoring gates and the most common rejection evidence."""
+    try:
+        diagnostic = _orchestrator(context).get_scoring_diagnostics(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load scoring diagnostics.")
+        return
+    reasons = diagnostic.get("common_ineligibility_reasons", [])
+    reason_text = "None" if not reasons else "; ".join(f"{item['reason']}: {item['count']} (e.g. {', '.join(map(str, item['example_ids']))})" for item in reasons[:3])
+    await _reply(update, f"Scoring config v{diagnostic['config_version']}\nFreshness window: {diagnostic['maximum_age_days']} days\nMinimum final score: {diagnostic['minimum_final_score']}\nMinimum credibility: {diagnostic['minimum_credibility_score']}\nMaximum factual risk: {diagnostic['maximum_factual_risk']}\nMaximum generic-content risk: {diagnostic['maximum_generic_commentary_risk']}\nModel-assisted: {diagnostic['model_assisted']}\nLatest evaluations: {diagnostic['latest_counts']}\nCommon reasons: {reason_text}")
 
 
 async def content_opportunities(update: Any, context: Any) -> None:
@@ -562,6 +737,85 @@ async def content_opportunity(update: Any, context: Any) -> None:
         await _reply(update, f"Could not find content opportunity id={opportunity_id}.")
         return
     await _reply(update, _format_content_opportunity(item, detailed=True), reply_markup=_opportunity_markup(opportunity_id))
+
+
+async def prepare_content(update: Any, context: Any) -> None:
+    """Prepare a review package from a stored opportunity; never publish it."""
+    opportunity_id = _parse_int(_command_payload(update).strip(), "opportunity_id")
+    if opportunity_id is None:
+        await _reply(update, "Usage: /prepare_content <opportunity_id>")
+        return
+    try:
+        post = _orchestrator(context).generate_content_package(opportunity_id=opportunity_id, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not prepare that content package. Check the opportunity ID and its review state.")
+        return
+    await _reply(update, _format_content_package(post), reply_markup=_package_markup(post["id"]))
+
+
+async def content_packages(update: Any, context: Any) -> None:
+    """List package-backed drafts awaiting a human decision."""
+    try:
+        packages = _orchestrator(context).list_pending_content_packages(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load content packages.")
+        return
+    if not packages:
+        await _reply(update, "No content packages are awaiting review.")
+        return
+    await _reply(update, "\n".join(f"#{item['id']}: {item.get('topic') or 'Content package'} | {item['status']} | v{item['package_version']} | image={item['image_source']}" for item in packages))
+
+
+async def content_package(update: Any, context: Any) -> None:
+    """Show one package draft and its review controls."""
+    post_id = _parse_int(_command_payload(update).strip(), "post_id")
+    if post_id is None:
+        await _reply(update, "Usage: /content_package <post_id>")
+        return
+    try:
+        post = _orchestrator(context).get_content_package(post_id=post_id, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, f"Could not find content package id={post_id}.")
+        return
+    await _reply(update, _format_content_package(post), reply_markup=_package_markup(post_id))
+
+
+async def content_sources(update: Any, context: Any) -> None:
+    """Display safe stored source attribution for one package."""
+    await _show_package_json(update, context, "source_references_json", "Sources")
+
+
+async def content_claims(update: Any, context: Any) -> None:
+    """Display stored factual-claim validation records for one package."""
+    await _show_package_json(update, context, "factual_claims_json", "Factual claims")
+
+
+async def revise_content(update: Any, context: Any) -> None:
+    """Route a tightly scoped content revision through the orchestrator."""
+    parts = _command_payload(update).split(maxsplit=2)
+    post_id = _parse_int(parts[0], "post_id") if parts else None
+    if post_id is None or len(parts) < 2:
+        await _reply(update, "Usage: /revise_content <post_id> <revision_type> [notes]")
+        return
+    try:
+        post = _orchestrator(context).revise_content_package(post_id=post_id, revision_type=parts[1], database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not revise that package. Check the ID and revision type.")
+        return
+    await _reply(update, _format_content_package(post), reply_markup=_package_markup(post_id))
+
+
+async def _show_package_json(update: Any, context: Any, field: str, label: str) -> None:
+    post_id = _parse_int(_command_payload(update).strip(), "post_id")
+    if post_id is None:
+        await _reply(update, f"Usage: /{'content_sources' if field == 'source_references_json' else 'content_claims'} <post_id>")
+        return
+    try:
+        post = _orchestrator(context).get_content_package(post_id=post_id, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, f"Could not find content package id={post_id}.")
+        return
+    await _reply(update, f"{label}:\n{post.get(field) or 'None'}")
 
 
 async def record_outcome(update: Any, context: Any) -> None:
@@ -826,6 +1080,9 @@ async def button_callback(update: Any, context: Any) -> None:
             )
             return
         await query.edit_message_text("Discarded draft.")
+        return
+    if data.startswith("package_"):
+        await _handle_package_callback(query, context, data)
         return
     if data.startswith("opportunity_"):
         await _handle_opportunity_callback(query, context, data)
@@ -1143,9 +1400,12 @@ def _format_signal(item: dict[str, Any]) -> str:
 def _format_scoring_result(result: dict[str, Any]) -> str:
     if not result.get("eligible"):
         return "\n".join([
-            f"Signal: {result.get('title') or result.get('signal_id')}",
-            "Eligibility: ineligible",
+            f"Signal {result.get('signal_id')}: {result.get('title') or 'Untitled'} is ineligible.",
             f"Reasons: {'; '.join(result.get('reasons', []))}",
+            f"Publication date: {result.get('published_at') or 'unknown'} | Age: {result.get('age_days') if result.get('age_days') is not None else 'unknown'} days | Freshness limit: {result.get('freshness_threshold_days')} days",
+            f"Credibility: {result.get('credibility_score', 0):.0f}/100 (minimum {result.get('minimum_credibility_score')})",
+            f"Profile matches: {', '.join(result.get('profile_matches', [])) or 'none'}",
+            "No model call was made.",
             "No opportunity was created.",
         ])
     score = result.get("score", {})
@@ -1163,11 +1423,15 @@ def _format_scoring_result(result: dict[str, Any]) -> str:
 
 
 def _format_scoring_run(result: dict[str, Any]) -> str:
-    return (
-        "Stored-signal scoring complete. Considered: {considered}. Eligible: {eligible}. "
-        "Ineligible: {ineligible}. Scored: {scored}. Model-assisted: {model_assisted}. "
-        "Deterministic fallbacks: {deterministic_fallbacks}. Opportunities: {opportunities_created}. Failures: {failures}."
-    ).format(**result)
+    text = ("Signal evaluation complete. Considered: {considered}. Eligible: {eligible}. "
+            "Ineligible: {ineligible}. Evaluated: {evaluated}. Ranked: {ranked}. "
+            "Opportunities: {opportunities_created}. Skipped already evaluated: {skipped_already_evaluated}. Failures: {failures}.").format(**result)
+    if result.get("selected_publication_oldest"):
+        text += f"\nSelected publication range: {result['selected_publication_oldest']} to {result['selected_publication_newest']}"
+    reasons = result.get("ineligibility_summary", [])
+    if reasons:
+        text += "\nIneligibility summary: " + "; ".join(f"{item['reason']}: {item['count']} (e.g. {', '.join(map(str, item['example_ids']))})" for item in reasons[:3])
+    return text
 
 
 def _format_ranked_signals(items: list[dict[str, Any]]) -> str:
@@ -1197,6 +1461,74 @@ def _format_content_opportunity(item: dict[str, Any], detailed: bool = False) ->
             "No post has been drafted yet.",
         ])
     return "\n".join(lines)
+
+
+def _format_content_package(post: dict[str, Any]) -> str:
+    hooks = _json_list(post.get("alternative_hooks_json"))
+    claims = _json_list(post.get("factual_claims_json"))
+    return "\n".join([
+        f"Content package #{post.get('id')} | {post.get('status')} | v{post.get('package_version')}",
+        post.get("draft_text") or "",
+        "Alternative hooks: " + "; ".join(str(hook.get("text", "")) for hook in hooks),
+        f"Unresolved claims: {sum(bool(item.get('confirmation_required')) for item in claims if isinstance(item, dict))}",
+        f"Image: {post.get('image_source')} | Alt text: {post.get('image_alt_text') or '-'}",
+        "Nothing has been published.",
+    ])
+
+
+def _package_markup(post_id: Any) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Save Draft", callback_data=f"package_save:{post_id}"), InlineKeyboardButton("Approve for Later Posting", callback_data=f"package_approve:{post_id}"), InlineKeyboardButton("Reject", callback_data=f"package_reject:{post_id}")],
+        [InlineKeyboardButton("View Sources", callback_data=f"package_sources:{post_id}"), InlineKeyboardButton("View Claims", callback_data=f"package_claims:{post_id}"), InlineKeyboardButton("Make More Personal", callback_data=f"package_personal:{post_id}")],
+        [InlineKeyboardButton("Make More Analytical", callback_data=f"package_analytical:{post_id}"), InlineKeyboardButton("Make More Concise", callback_data=f"package_concise:{post_id}"), InlineKeyboardButton("Make Funnier", callback_data=f"package_funny:{post_id}")],
+    ])
+
+
+async def _handle_package_callback(query: Any, context: Any, data: str) -> None:
+    parts = data.split(":", 1)
+    post_id = _parse_int(parts[1], "post_id") if len(parts) == 2 else None
+    if post_id is None:
+        await query.edit_message_text("Invalid or stale content package action.")
+        return
+    action = parts[0]
+    try:
+        orchestrator = _orchestrator(context)
+        if action == "package_save":
+            orchestrator.save_content_draft(post_id=post_id, database=_database(context))
+            message = "Content package saved. Nothing has been published."
+        elif action == "package_approve":
+            result = orchestrator.approve_content_package_for_later(
+                post_id=post_id, database=_database(context)
+            )
+            message = result["message"]
+        elif action == "package_reject":
+            orchestrator.reject_content_package(post_id=post_id, database=_database(context))
+            message = "Content package rejected. Nothing has been published."
+        elif action in {"package_personal", "package_analytical", "package_concise", "package_funny"}:
+            revision = {"package_personal": "make_more_personal", "package_analytical": "make_more_analytical", "package_concise": "make_more_concise", "package_funny": "make_funnier"}[action]
+            post = orchestrator.revise_content_package(
+                post_id=post_id, revision_type=revision, database=_database(context)
+            )
+            await query.edit_message_text(_format_content_package(post))
+            return
+        elif action in {"package_sources", "package_claims"}:
+            post = orchestrator.get_content_package(
+                post_id=post_id, database=_database(context)
+            )
+            field = (
+                "source_references_json"
+                if action == "package_sources"
+                else "factual_claims_json"
+            )
+            await query.edit_message_text(post.get(field) or "None")
+            return
+        else:
+            await query.edit_message_text("Invalid or stale content package action.")
+            return
+    except NetworkOrchestratorError:
+        await query.edit_message_text("That content package is unavailable or cannot make that transition.")
+        return
+    await query.edit_message_text(message)
 
 
 async def _handle_opportunity_callback(query: Any, context: Any, data: str) -> None:
@@ -1453,6 +1785,19 @@ def _format_post_draft_response(post: Any) -> str:
     else:
         prefix = "Here's a LinkedIn post draft."
     return f"{prefix}\n\nDraft post #{_get_value(post, 'id')}:\n{_get_value(post, 'draft_text')}"
+
+
+def _format_briefing_result(result: dict[str, Any]) -> str:
+    """Keep manual briefing feedback concise and decision-oriented."""
+    scan = result.get("scan", {})
+    scoring = result.get("scoring", {})
+    return (
+        f"Manual briefing #{result.get('run_id')}: {result.get('status')}.\n"
+        f"Sources scanned: {scan.get('sources_scanned', 0)}. New signals: {scan.get('new_signals', 0)}.\n"
+        f"Signals scored: {scoring.get('scored', 0)}. Packages prepared: {len(result.get('packages', []))}.\n"
+        f"Follow-ups due: {len(result.get('followups', []))}.\n"
+        f"Dry run: {result.get('dry_run', False)}. Nothing has been published."
+    )
 
 
 def _format_due_line(item: dict[str, Any]) -> str:

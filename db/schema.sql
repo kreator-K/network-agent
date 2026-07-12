@@ -290,10 +290,26 @@ CREATE TABLE IF NOT EXISTS content_posts (
     inspiration_source_notes TEXT,
     status TEXT NOT NULL DEFAULT 'draft',
     engagement_metric REAL,
+    opportunity_id INTEGER REFERENCES content_opportunities(id) ON DELETE SET NULL,
+    profile_version INTEGER REFERENCES personal_brand_profile(version),
+    scoring_config_version INTEGER REFERENCES signal_scoring_config(version),
+    package_version INTEGER NOT NULL DEFAULT 1,
+    package_json TEXT,
+    source_references_json TEXT,
+    factual_claims_json TEXT,
+    alternative_hooks_json TEXT,
+    personal_angle_json TEXT,
+    risk_assessment_json TEXT,
+    suggested_first_comment TEXT,
+    suggested_hashtags_json TEXT,
+    image_brief_json TEXT,
+    image_alt_text TEXT,
+    approved_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (image_source IN ('uploaded', 'generated', 'none')),
-    CHECK (status IN ('draft', 'saved', 'approved_for_later_posting', 'discarded'))
+    CHECK (status IN ('draft', 'saved', 'needs_confirmation', 'approved_for_later_posting', 'rejected', 'discarded')),
+    CHECK (package_version >= 1)
 );
 
 CREATE TABLE IF NOT EXISTS calendar_blocks (
@@ -308,6 +324,79 @@ CREATE TABLE IF NOT EXISTS calendar_blocks (
     status TEXT NOT NULL DEFAULT 'confirmed',
     created_at TEXT NOT NULL,
     CHECK (status IN ('confirmed', 'calendar_created', 'calendar_failed'))
+);
+
+CREATE TABLE IF NOT EXISTS briefing_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    enabled INTEGER NOT NULL DEFAULT 0,
+    briefing_time TEXT NOT NULL DEFAULT '08:30',
+    timezone TEXT NOT NULL DEFAULT 'America/New_York',
+    dry_run INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    CHECK (enabled IN (0, 1)), CHECK (dry_run IN (0, 1))
+);
+
+CREATE TABLE IF NOT EXISTS briefing_runs (
+    id INTEGER PRIMARY KEY,
+    run_key TEXT NOT NULL UNIQUE,
+    run_type TEXT NOT NULL,
+    scheduled_for TEXT NOT NULL,
+    timezone TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    status TEXT NOT NULL,
+    sources_considered_count INTEGER NOT NULL DEFAULT 0,
+    sources_succeeded_count INTEGER NOT NULL DEFAULT 0,
+    sources_failed_count INTEGER NOT NULL DEFAULT 0,
+    signals_fetched_count INTEGER NOT NULL DEFAULT 0,
+    new_signals_count INTEGER NOT NULL DEFAULT 0,
+    duplicate_signals_count INTEGER NOT NULL DEFAULT 0,
+    signals_scored_count INTEGER NOT NULL DEFAULT 0,
+    eligible_signals_count INTEGER NOT NULL DEFAULT 0,
+    opportunities_created_count INTEGER NOT NULL DEFAULT 0,
+    packages_prepared_count INTEGER NOT NULL DEFAULT 0,
+    followups_due_count INTEGER NOT NULL DEFAULT 0,
+    meetings_count INTEGER NOT NULL DEFAULT 0,
+    telegram_delivery_status TEXT NOT NULL DEFAULT 'not_requested',
+    telegram_message_ids_json TEXT NOT NULL DEFAULT '[]',
+    error_summary TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    CHECK (status IN ('started','completed','completed_with_warnings','no_content','failed','skipped','delivery_failed'))
+);
+
+CREATE TABLE IF NOT EXISTS prospect_candidates (
+    id INTEGER PRIMARY KEY,
+    full_name TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    role_title TEXT,
+    company TEXT,
+    location TEXT,
+    public_profile_url TEXT,
+    professional_summary TEXT,
+    source_signal_ids_json TEXT NOT NULL,
+    source_references_json TEXT NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    relevant_topics_json TEXT NOT NULL DEFAULT '[]',
+    recommended_ask_type TEXT NOT NULL,
+    recommended_rationale TEXT NOT NULL,
+    profile_version INTEGER NOT NULL REFERENCES personal_brand_profile(version),
+    scoring_config_version INTEGER NOT NULL REFERENCES signal_scoring_config(version),
+    score_json TEXT NOT NULL,
+    total_score REAL NOT NULL,
+    confidence REAL NOT NULL,
+    source_credibility_score REAL NOT NULL,
+    duplicate_candidate_id INTEGER REFERENCES prospect_candidates(id) ON DELETE SET NULL,
+    matching_prospect_id INTEGER REFERENCES prospects(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'discovered',
+    decision_reason TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    decided_at TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    CHECK (status IN ('discovered','shortlisted','saved','approved','added_to_crm','skipped','rejected','duplicate','expired','failed_validation')),
+    CHECK (total_score >= 0 AND total_score <= 100), CHECK (confidence >= 0 AND confidence <= 1),
+    CHECK (source_credibility_score >= 0 AND source_credibility_score <= 100)
 );
 
 CREATE INDEX IF NOT EXISTS idx_prospects_status ON prospects(status);
@@ -354,4 +443,6 @@ CREATE INDEX IF NOT EXISTS idx_refinement_proposals_run_id
 CREATE INDEX IF NOT EXISTS idx_refinement_proposals_status
     ON refinement_proposals(status);
 CREATE INDEX IF NOT EXISTS idx_content_posts_status ON content_posts(status);
+CREATE INDEX IF NOT EXISTS idx_briefing_runs_scheduled_for ON briefing_runs(scheduled_for DESC);
+CREATE INDEX IF NOT EXISTS idx_prospect_candidates_status_score ON prospect_candidates(status, total_score DESC);
 CREATE INDEX IF NOT EXISTS idx_calendar_blocks_prospect_id ON calendar_blocks(prospect_id);

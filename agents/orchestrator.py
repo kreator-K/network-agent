@@ -2,6 +2,7 @@
 
 import sqlite3
 import json
+import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -117,6 +118,28 @@ class NetworkOrchestrator:
             return {"prospect": prospect, "status": "added"}
         except Exception as exc:
             _raise_with_context("add_prospect", {"name": name}, exc)
+
+    def discover_prospect_candidates(self, *, database: sqlite3.Connection | DatabaseRef, limit: int = 20) -> list[dict[str, Any]]:
+        """Extract only stored public-source candidates; no external profile fetching."""
+        try:
+            return [candidate.model_dump() for candidate in self.prospect_discovery_agent.extract_candidates_from_signals(database, limit)]
+        except Exception as exc:
+            _raise_with_context("discover_prospect_candidates", {"limit": limit}, exc)
+
+    def list_prospect_candidates(self, *, database: sqlite3.Connection | DatabaseRef, limit: int = 20) -> list[dict[str, Any]]:
+        """Return review candidates pending explicit human approval."""
+        try:
+            return [candidate.model_dump() for candidate in self.prospect_discovery_agent.list_candidates(database, limit)]
+        except Exception as exc:
+            _raise_with_context("list_prospect_candidates", {}, exc)
+
+    def approve_prospect_candidate(self, candidate_id: int, *, database: DatabaseRef) -> dict[str, Any]:
+        """Add a candidate to CRM only after a direct user decision."""
+        try:
+            prospect = self.prospect_discovery_agent.approve_candidate(candidate_id, self._tracker(database), database)
+            return {"candidate_id": candidate_id, "prospect": prospect}
+        except Exception as exc:
+            _raise_with_context("approve_prospect_candidate", {"candidate_id": candidate_id}, exc)
 
     def draft_outreach(
         self,
@@ -500,18 +523,25 @@ class NetworkOrchestrator:
             _raise_with_context("score_signal", {"signal_id": signal_id}, exc)
 
     def score_recent_signals(
-        self, *, database: sqlite3.Connection | DatabaseRef, limit: int = 10
+        self, *, database: sqlite3.Connection | DatabaseRef, limit: int = 10, force: bool = False
     ) -> dict[str, Any]:
         """Coordinate a bounded stored-signal scoring run."""
         try:
-            result = self.signal_intelligence_agent.score_recent_signals(database, limit)
+            result = self.signal_intelligence_agent.score_recent_signals(database, limit, force)
             opportunities = self.signal_intelligence_agent.generate_top_content_opportunities(
                 database, limit
             )
             result["opportunities_created"] = len(opportunities)
             return result
         except Exception as exc:
-            _raise_with_context("score_recent_signals", {"limit": limit}, exc)
+            _raise_with_context("score_recent_signals", {"limit": limit, "force": force}, exc)
+
+    def get_scoring_queue(self, *, database: sqlite3.Connection | DatabaseRef, limit: int = 10) -> list[dict[str, Any]]:
+        """Preview the read-only, publication-first scoring selection queue."""
+        try:
+            return self.signal_intelligence_agent.get_scoring_queue(database, limit)
+        except Exception as exc:
+            _raise_with_context("get_scoring_queue", {"limit": limit}, exc)
 
     def generate_content_opportunity(
         self, signal_id: int, *, database: sqlite3.Connection | DatabaseRef
@@ -540,6 +570,13 @@ class NetworkOrchestrator:
             return self.signal_intelligence_agent.list_ranked_signals(database, limit)
         except Exception as exc:
             _raise_with_context("get_ranked_signals", {"limit": limit}, exc)
+
+    def get_scoring_diagnostics(self, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        """Expose read-only eligibility diagnostics for the operator interface."""
+        try:
+            return self.signal_intelligence_agent.get_scoring_diagnostics(database)
+        except Exception as exc:
+            _raise_with_context("get_scoring_diagnostics", {}, exc)
 
     def list_content_opportunities(
         self, *, database: sqlite3.Connection | DatabaseRef, status: str | None = None, limit: int = 20
@@ -840,6 +877,89 @@ class NetworkOrchestrator:
         except Exception as exc:
             _raise_with_context("get_pending_drafts", {}, exc)
 
+    def build_daily_briefing(self, *, database: sqlite3.Connection | DatabaseRef, run_type: str = "manual", dry_run: bool = False) -> dict[str, Any]:
+        """Build one idempotent proactive briefing without any LinkedIn action."""
+        try:
+            connection, should_close = _coerce_connection(database)
+            try:
+                settings_row = connection.execute("SELECT * FROM briefing_settings WHERE id = 1").fetchone()
+                now = datetime.now(UTC)
+                timezone = settings_row["timezone"] if settings_row else "America/New_York"
+                run_key = hashlib.sha256(f"{run_type}:{timezone}:{now.date().isoformat()}:{now.hour}".encode()).hexdigest()[:32]
+                existing = connection.execute("SELECT * FROM briefing_runs WHERE run_key = ?", (run_key,)).fetchone()
+                if existing is not None:
+                    return {"run_id": existing["id"], "status": "skipped", "run_key": run_key, "reason": "Briefing window already ran."}
+                cursor = connection.execute("INSERT INTO briefing_runs (run_key, run_type, scheduled_for, timezone, started_at, status, created_at, metadata_json) VALUES (?, ?, ?, ?, ?, 'started', ?, ?)", (run_key, run_type, now.isoformat(), timezone, now.isoformat(), now.isoformat(), json.dumps({"dry_run": dry_run})))
+                run_id = cursor.lastrowid
+                connection.commit()
+            finally:
+                if should_close:
+                    connection.close()
+            scan = self.scan_enabled_signal_sources(database=database)
+            scored = self.score_recent_signals(limit=10, database=database)
+            packages: list[dict[str, Any]] = []
+            for opportunity in self.list_content_opportunities(database=database, status="candidate", limit=1):
+                try:
+                    packages.append(self.generate_content_package(opportunity["id"], database=database))
+                except NetworkOrchestratorError:
+                    continue
+            followups = self.get_followups_due(database=cast(DatabaseRef, database))
+            connection, should_close = _coerce_connection(database)
+            try:
+                completed = datetime.now(UTC).isoformat()
+                status = "completed" if packages or followups or scored.get("scored", 0) else "no_content"
+                connection.execute("UPDATE briefing_runs SET completed_at = ?, status = ?, sources_considered_count = ?, sources_succeeded_count = ?, sources_failed_count = ?, new_signals_count = ?, duplicate_signals_count = ?, signals_scored_count = ?, eligible_signals_count = ?, opportunities_created_count = ?, packages_prepared_count = ?, followups_due_count = ?, metadata_json = ? WHERE id = ?", (completed, status, scan.get("sources_scanned", 0), scan.get("sources_scanned", 0) - scan.get("failures", 0), scan.get("failures", 0), scan.get("new_signals", 0), scan.get("duplicates", 0), scored.get("scored", 0), scored.get("eligible", 0), scored.get("opportunities_created", 0), len(packages), len(followups), json.dumps({"dry_run": dry_run, "packages": [item.get("id") for item in packages]}), run_id))
+                connection.commit()
+            finally:
+                if should_close:
+                    connection.close()
+            return {"run_id": run_id, "run_key": run_key, "status": status, "scan": scan, "scoring": scored, "packages": packages, "followups": followups, "dry_run": dry_run}
+        except Exception as exc:
+            _raise_with_context("build_daily_briefing", {"run_type": run_type}, exc)
+
+    def list_briefing_runs(self, *, database: sqlite3.Connection | DatabaseRef, limit: int = 10) -> list[dict[str, Any]]:
+        """Return recent auditable briefing summaries."""
+        connection, should_close = _coerce_connection(database)
+        try:
+            return [dict(row) for row in connection.execute("SELECT * FROM briefing_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()]
+        finally:
+            if should_close:
+                connection.close()
+
+    def get_briefing_status(self, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        """Return safe operational briefing state for Telegram display."""
+        connection, should_close = _coerce_connection(database)
+        try:
+            config = connection.execute("SELECT * FROM briefing_settings WHERE id = 1").fetchone()
+            last_run = connection.execute("SELECT * FROM briefing_runs ORDER BY id DESC LIMIT 1").fetchone()
+            if config is None:
+                raise ValueError("Briefing settings have not been initialized.")
+            return {"enabled": bool(config["enabled"]), "briefing_time": config["briefing_time"], "timezone": config["timezone"], "dry_run": bool(config["dry_run"]), "last_run": None if last_run is None else dict(last_run)}
+        except Exception as exc:
+            _raise_with_context("get_briefing_status", {}, exc)
+        finally:
+            if should_close:
+                connection.close()
+
+    def update_briefing_settings(self, *, enabled: bool | None = None, briefing_time: str | None = None, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        """Persist a limited operational setting without starting any scheduler."""
+        if briefing_time is not None:
+            try:
+                datetime.strptime(briefing_time, "%H:%M")
+            except ValueError as exc:
+                raise NetworkOrchestratorError("Briefing time must use HH:MM.") from exc
+        connection, should_close = _coerce_connection(database)
+        try:
+            existing = self.get_briefing_status(database=connection)
+            connection.execute("UPDATE briefing_settings SET enabled = ?, briefing_time = ?, updated_at = ? WHERE id = 1", (int(existing["enabled"] if enabled is None else enabled), existing["briefing_time"] if briefing_time is None else briefing_time, datetime.now(UTC).isoformat()))
+            connection.commit()
+            return self.get_briefing_status(database=connection)
+        except Exception as exc:
+            _raise_with_context("update_briefing_settings", {}, exc)
+        finally:
+            if should_close:
+                connection.close()
+
     def save_content_draft(
         self,
         post_id: int,
@@ -853,6 +973,53 @@ class NetworkOrchestrator:
             database=database,
             method_name="save_content_draft",
         )
+
+    def generate_content_package(self, opportunity_id: int, *, database: sqlite3.Connection | DatabaseRef, image_mode: str = "disabled") -> dict[str, Any]:
+        """Prepare a review-only package from a stored opportunity; never publish it."""
+        try:
+            return self.content_inspiration_agent.generate_package_from_opportunity(
+                opportunity_id, database, image_mode
+            ).model_dump()
+        except Exception as exc:
+            _raise_with_context("generate_content_package", {"opportunity_id": opportunity_id}, exc)
+
+    def get_content_package(self, post_id: int, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        """Load one package-backed draft for Telegram review."""
+        try:
+            return self.content_inspiration_agent.get_package(post_id, database).model_dump()
+        except Exception as exc:
+            _raise_with_context("get_content_package", {"post_id": post_id}, exc)
+
+    def list_pending_content_packages(self, *, database: sqlite3.Connection | DatabaseRef) -> list[dict[str, Any]]:
+        """List existing package drafts without making a post."""
+        try:
+            return [post.model_dump() for post in self.content_inspiration_agent.get_pending_drafts(database) if post.package_json]
+        except Exception as exc:
+            _raise_with_context("list_pending_content_packages", {}, exc)
+
+    def approve_content_package_for_later(self, post_id: int, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        """Approve internally only after deterministic package validation."""
+        try:
+            post = self.content_inspiration_agent.get_package(post_id, database)
+            blockers = self.content_inspiration_agent.validate_package_for_approval(post)
+            if blockers:
+                raise ValueError("; ".join(blockers))
+            result = self._update_content_post_status(post_id, "approved_for_later_posting", database=database, method_name="approve_content_package_for_later")
+            return {**result, "message": "Approved for later posting. Nothing has been published."}
+        except Exception as exc:
+            _raise_with_context("approve_content_package_for_later", {"post_id": post_id}, exc)
+
+    def reject_content_package(self, post_id: int, reason: str | None = None, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        """Reject a package without touching LinkedIn or its source opportunity."""
+        _ = reason
+        return self._update_content_post_status(post_id, "discarded", database=database, method_name="reject_content_package")
+
+    def revise_content_package(self, post_id: int, revision_type: str, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        """Run a controlled revision that preserves package provenance."""
+        try:
+            return self.content_inspiration_agent.revise_package(post_id, revision_type, database).model_dump()
+        except Exception as exc:
+            _raise_with_context("revise_content_package", {"post_id": post_id, "revision_type": revision_type}, exc)
 
     def approve_content_draft_for_later_posting(
         self,
