@@ -28,7 +28,7 @@ This is not an automation/spam tool. No agent may autonomously send a LinkedIn c
 
 `NetworkOrchestrator` coordinates:
 
-1. `ProspectDiscoveryAgent` - structured intake and enrichment of manually-provided prospect info. Does not search or scrape.
+1. `ProspectDiscoveryAgent` - structured intake and enrichment of manually-provided prospect info. In Phase 8F it may create review-only candidates from stored, approved public-signal metadata, score and deduplicate them, and convert them to CRM prospects only after explicit user approval. It does not search or scrape LinkedIn, fetch profiles, collect private contact data, or contact anyone.
 2. `ProfileContextAgent` - extracts deterministic prospect context from user-provided profile text/notes for outreach drafting, and owns deterministic personal-brand profile validation, version retrieval, and prompt-ready rendering. Personal-brand versions live in SQLite; the JSON seed is an initialization input only, and normal workflows use the active SQLite version.
 3. `OutreachDraftAgent` - drafts connection requests and follow-up messages. Permanently draft-only; never sends, because LinkedIn's public API does not support programmatic outreach for individual developer accounts.
 4. `RelationshipTrackerAgent` - CRM. Tracks contact status, last-touch date, follow-up-due flags, meeting status.
@@ -67,6 +67,7 @@ Telegram bot is the primary interface. All approval, editing, and confirmation f
 - Keep model orchestration separate from bot handlers and from business logic.
 - Content opportunities are not post drafts. `ContentInspirationAgent` remains the future owner of approved post packages; personal-brand facts and scoring configuration remain human-controlled.
 - Approval for later posting is an internal review state only. No Phase 8D content package may be published or sent to LinkedIn.
+- Phase 8E adds no specialist agent. The briefing runner is operational infrastructure that invokes `NetworkOrchestrator`; it may prepare review work but cannot approve, publish, send outreach, or alter profiles and scoring weights.
 - `public_signal_gateway` is the only public-feed HTTP boundary. It validates RSS/Atom URLs, blocks LinkedIn and private-network targets, and does not write SQLite or call models.
 - Use mock mode by default for all model/image calls during development (`MOCK_MODE=true`), same pattern as `ads-agent`.
 - Use Nvidia NIM as the default model provider (same pattern as `video-data-agent`), configurable via `.env`.

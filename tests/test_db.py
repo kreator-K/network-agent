@@ -13,6 +13,8 @@ from db.models import Prospect, ProspectStatus, RefinementHistoryEntry
 
 
 EXPECTED_TABLES = [
+    "briefing_runs",
+    "briefing_settings",
     "calendar_blocks",
     "content_opportunities",
     "content_posts",
@@ -20,6 +22,7 @@ EXPECTED_TABLES = [
     "core_intent",
     "interactions",
     "personal_brand_profile",
+    "prospect_candidates",
     "prospects",
     "refinable_parameters",
     "refinement_history",

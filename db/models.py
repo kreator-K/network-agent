@@ -452,6 +452,49 @@ class ContentPackage(BaseModel):
     package_version: int = Field(ge=1)
 
 
+class BriefingRun(DataLayerModel):
+    """Auditable proactive briefing execution record."""
+    id: int | None = None
+    run_key: str
+    run_type: Literal["scheduled", "manual", "retry"]
+    scheduled_for: str
+    timezone: str
+    started_at: str
+    completed_at: str | None = None
+    status: Literal["started", "completed", "completed_with_warnings", "no_content", "failed", "skipped", "delivery_failed"]
+    telegram_delivery_status: str = "not_requested"
+    telegram_message_ids_json: str = "[]"
+    metadata_json: str = "{}"
+    created_at: str
+
+
+class ProspectCandidate(DataLayerModel):
+    """Source-backed public professional candidate pending explicit CRM approval."""
+    id: int | None = None
+    full_name: str = Field(min_length=1)
+    normalized_name: str
+    role_title: str | None = None
+    company: str | None = None
+    location: str | None = None
+    public_profile_url: str | None = None
+    professional_summary: str | None = None
+    source_signal_ids_json: str
+    source_references_json: str
+    relevant_topics_json: str = "[]"
+    recommended_ask_type: Literal["resume_review", "career_guidance", "general_chat"]
+    recommended_rationale: str
+    profile_version: int = Field(ge=1)
+    scoring_config_version: int = Field(ge=1)
+    score_json: str
+    total_score: float = Field(ge=0, le=100)
+    confidence: float = Field(ge=0, le=1)
+    source_credibility_score: float = Field(ge=0, le=100)
+    matching_prospect_id: int | None = None
+    status: Literal["discovered", "shortlisted", "saved", "approved", "added_to_crm", "skipped", "rejected", "duplicate", "expired", "failed_validation"] = "discovered"
+    created_at: str
+    updated_at: str
+
+
 class CalendarBlock(DataLayerModel):
     """Calendar block record tied to an explicitly confirmed prospect meeting."""
 

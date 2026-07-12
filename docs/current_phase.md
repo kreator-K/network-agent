@@ -2,28 +2,18 @@
 
 ## Phase Completion Report
 
-Phase: 8D — Approval-ready Content Packages
+Phase: 8F — Assisted Prospect Discovery
 
 Status: completed
 
-Files changed: content package models, `content_posts` package fields and migration, ContentInspirationAgent package generation and validation, model task types, orchestrator workflows, Telegram package review commands, configuration, integrity checks, tests, and Phase 8D documentation.
+Files changed: candidate model and SQLite ledger, ProspectDiscoveryAgent source-backed extraction and CRM conversion, orchestrator coordination, Telegram review commands, tests, and Phase 8F documentation.
 
-Database changes: package-backed `content_posts` retain opportunity/profile/scoring provenance, package version, structured source references, factual claims, hooks, personal angle, risk assessment, image brief/alt text, and approval timestamp.
+Safety: candidates are created only from already stored approved public-signal metadata. No LinkedIn fetching, scraping, private contact data, automated CRM insertion, outreach, email, meeting, or publishing exists.
 
-Model task types added: `content_package_generation`, controlled revision task names, risk review, and image brief generation.
+Telegram commands: `/discover_candidates`, `/prospect_candidates`, and `/approve_candidate <candidate_id>`.
 
-Image behavior: text-only and mock-generated images work; real mode remains isolated behind `image_gateway`; an image failure preserves the text package.
+Tests executed: full pytest suite, mypy, and ruff.
 
-Telegram commands: `/prepare_content`, `/content_packages`, `/content_package`, `/content_sources`, `/content_claims`, and `/revise_content`.
+Acceptance: source attribution, explicit approval before CRM insertion, clean duplicate/invalid status rejection, and existing manual prospect workflows remain intact. Phase 8G remains not started.
 
-Tests executed: full pytest suite, mypy, ruff, and database initialization.
-
-Acceptance criteria: PASS. Packages are source-traced and typed, approval is internal only, no LinkedIn action exists, the existing manual `/draft_post` flow remains unchanged, and Phase 8E remains not started.
-
-Example content package: a candidate AI product strategy opportunity becomes a draft with a primary post, two alternative hooks, `claim-1` linked to its signal, professional-identity framing, and a safe conceptual image brief.
-
-Example approval response: `Approved for later posting. Nothing has been published.`
-
-Known gaps: no scheduling, no briefing, no LinkedIn publishing, and no automatic post preparation.
-
-Recommended next phase: 8E — Proactive Telegram Briefings. Do not begin automatically.
+Recommended next phase: 8G — Approved LinkedIn Publishing Boundary. Do not begin automatically.

@@ -502,6 +502,12 @@ class SignalIntelligenceAgent:
                 return {
                     "signal_id": signal_id, "title": row["title"], "eligible": False,
                     "reasons": reasons, "mode": "deterministic", "opportunity": None,
+                    "published_at": row["published_at"], "age_days": _age_days(row["published_at"]),
+                    "freshness_threshold_days": config["maximum_age_days"],
+                    "credibility_score": deterministic.credibility,
+                    "minimum_credibility_score": config["minimum_credibility_score"],
+                    "profile_matches": _profile_matches(row, _profile_data(profile)),
+                    "model_attempted": False,
                 }
 
             semantic, mode, fallback_reason = self._semantic_scores(row, profile, deterministic, config)
@@ -538,15 +544,36 @@ class SignalIntelligenceAgent:
             if should_close:
                 connection.close()
 
-    def score_recent_signals(self, database: DatabaseRef, limit: int = 10) -> dict[str, Any]:
+    def score_recent_signals(self, database: DatabaseRef, limit: int = 10, force: bool = False) -> dict[str, Any]:
         """Score a bounded set of normalized signals without fetching sources."""
         connection, should_close = _coerce_connection(database)
         try:
-            config = json.loads(get_active_signal_scoring_config_row(connection)["config_json"])
+            config_row = get_active_signal_scoring_config_row(connection)
+            config = json.loads(config_row["config_json"])
+            profile = self.profile_agent.get_active_profile(connection)
+            if profile is None:
+                raise SignalIntelligenceError("An active personal-brand profile is required.")
             bounded = max(1, min(limit, int(config["maximum_signals_per_run"])))
+            where = "status = 'normalized'"
+            params: list[Any] = []
+            if force:
+                where = "status IN ('normalized', 'scored', 'ineligible')"
+            else:
+                where = """status = 'normalized'
+                    OR (eligibility_status = 'ineligible' AND (
+                        profile_version IS NULL OR profile_version != ?
+                        OR scoring_config_version IS NULL OR scoring_config_version != ?
+                    ))"""
+                params = [profile.version, config_row["version"]]
             rows = connection.execute(
-                "SELECT id FROM signals WHERE status = 'normalized' ORDER BY created_at DESC, id DESC LIMIT ?",
-                (bounded,),
+                f"""SELECT id, published_at, updated_at_source, fetched_at FROM signals
+                WHERE ({where}) AND status NOT IN ('duplicate', 'failed')
+                ORDER BY CASE WHEN datetime(published_at) IS NULL THEN 1 ELSE 0 END,
+                    datetime(published_at) DESC,
+                    CASE WHEN datetime(updated_at_source) IS NULL THEN 1 ELSE 0 END,
+                    datetime(updated_at_source) DESC,
+                    datetime(fetched_at) DESC, id ASC LIMIT ?""",
+                (*params, bounded),
             ).fetchall()
         finally:
             if should_close:
@@ -559,13 +586,31 @@ class SignalIntelligenceAgent:
             except Exception:
                 failures += 1
                 logger.warning("Signal scoring failed: signal_id=%s", row["id"])
+        publication_dates = [str(row["published_at"]) for row in rows if row["published_at"]]
         return {
             "considered": len(rows), "eligible": sum(result["eligible"] for result in results),
             "ineligible": sum(not result["eligible"] for result in results),
-            "scored": len(results), "model_assisted": sum(result["mode"] == "model_assisted" for result in results),
+            "evaluated": len(results), "ranked": sum(result["eligible"] for result in results), "scored": len(results), "model_assisted": sum(result["mode"] == "model_assisted" for result in results),
             "deterministic_fallbacks": sum(result["mode"] == "deterministic_fallback" for result in results),
-            "failures": failures, "results": results,
+            "failures": failures, "results": results, "ineligibility_summary": _summarize_ineligibility(results),
+            "skipped_already_evaluated": 0, "force": force,
+            "selected_publication_oldest": min(publication_dates) if publication_dates else None,
+            "selected_publication_newest": max(publication_dates) if publication_dates else None,
         }
+
+    def get_scoring_queue(self, database: DatabaseRef, limit: int = 10) -> list[dict[str, Any]]:
+        """Preview the publication-first scoring queue without evaluating signals."""
+        connection, should_close = _coerce_connection(database)
+        try:
+            config = json.loads(get_active_signal_scoring_config_row(connection)["config_json"])
+            bounded = max(1, min(limit, int(config["maximum_signals_per_run"])))
+            rows = connection.execute("""SELECT id, title, published_at, fetched_at, status FROM signals
+                WHERE status = 'normalized' ORDER BY CASE WHEN datetime(published_at) IS NULL THEN 1 ELSE 0 END,
+                datetime(published_at) DESC, datetime(updated_at_source) DESC, datetime(fetched_at) DESC, id ASC LIMIT ?""", (bounded,)).fetchall()
+            return [{"signal_id": row["id"], "title": row["title"], "published_at": row["published_at"], "age_days": _age_days(row["published_at"]), "status": row["status"], "queue_reason": "newest publication date" if row["published_at"] else "no publication date; fetched-time fallback"} for row in rows]
+        finally:
+            if should_close:
+                connection.close()
 
     def generate_content_opportunity(
         self, signal_id: int, database: DatabaseRef
@@ -661,10 +706,24 @@ class SignalIntelligenceAgent:
             rows = connection.execute(
                 """SELECT signals.*, signal_sources.name AS source_name FROM signals
                 JOIN signal_sources ON signal_sources.id = signals.source_id
-                WHERE signals.total_score IS NOT NULL ORDER BY signals.total_score DESC, signals.id DESC LIMIT ?""",
+                WHERE signals.total_score IS NOT NULL AND signals.eligibility_status = 'eligible' ORDER BY signals.total_score DESC, signals.id DESC LIMIT ?""",
                 (limit,),
             ).fetchall()
             return [_signal_display(row) for row in rows]
+        finally:
+            if should_close:
+                connection.close()
+
+    def get_scoring_diagnostics(self, database: DatabaseRef) -> dict[str, Any]:
+        """Return read-only scoring configuration and recent eligibility evidence."""
+        connection, should_close = _coerce_connection(database)
+        try:
+            config_row = get_active_signal_scoring_config_row(connection)
+            config = json.loads(config_row["config_json"])
+            rows = connection.execute("SELECT id, eligibility_reasons_json FROM signals WHERE eligibility_status = 'ineligible' ORDER BY scored_at DESC, id DESC LIMIT 100").fetchall()
+            results = [{"signal_id": row["id"], "eligible": False, "reasons": _json_list(row["eligibility_reasons_json"])} for row in rows]
+            latest = connection.execute("SELECT eligibility_status, COUNT(*) AS count FROM signals WHERE eligibility_status != 'pending' GROUP BY eligibility_status").fetchall()
+            return {"config_version": config_row["version"], "maximum_age_days": config["maximum_age_days"], "minimum_final_score": config["minimum_final_score"], "minimum_credibility_score": config["minimum_credibility_score"], "maximum_factual_risk": config["maximum_factual_risk"], "maximum_generic_commentary_risk": config["maximum_generic_commentary_risk"], "model_assisted": config["model_assisted_scoring_enabled"], "latest_counts": {row["eligibility_status"]: row["count"] for row in latest}, "common_ineligibility_reasons": _summarize_ineligibility(results)}
         finally:
             if should_close:
                 connection.close()
@@ -936,6 +995,40 @@ def _freshness_score(published_at: str | None, half_life_days: int, maximum_age_
     if age_days > maximum_age_days:
         return 0.0
     return max(0.0, min(100.0, 100.0 * math.pow(0.5, age_days / max(1, half_life_days))))
+
+
+def _age_days(published_at: str | None) -> int | None:
+    if not published_at:
+        return None
+    try:
+        value = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+        if value.tzinfo is None:
+            return None
+        return max(0, int((datetime.now(UTC) - value.astimezone(UTC)).total_seconds() // 86400))
+    except ValueError:
+        return None
+
+
+def _profile_matches(row: sqlite3.Row, profile: PersonalBrandProfileData) -> list[str]:
+    text = f"{row['title'] or ''} {row['summary'] or ''}".lower()
+    return sorted({term for term in _keywords(profile.content_pillars + profile.career_focus + profile.institutions) if term in text})[:10]
+
+
+def _json_list(value: str | None) -> list[Any]:
+    try:
+        parsed = json.loads(value or "[]")
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _summarize_ineligibility(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[int]] = {}
+    for result in results:
+        for reason in result.get("reasons", []):
+            label = "stale" if "older than" in reason else "credibility below threshold" if "credibility" in reason else "no profile overlap" if "overlap" in reason else reason
+            grouped.setdefault(label, []).append(int(result["signal_id"]))
+    return [{"reason": reason, "count": len(ids), "example_ids": ids[:3]} for reason, ids in sorted(grouped.items(), key=lambda item: -len(item[1]))]
 
 
 def _token_overlap(first: str, second: str) -> float:

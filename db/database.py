@@ -55,6 +55,10 @@ def initialize_database(
         seed_core_intent(connection, core_intent_path)
         seed_personal_brand_profile(connection, personal_brand_profile_path)
         seed_signal_scoring_config(connection, signal_scoring_config_path)
+        connection.execute(
+            "INSERT OR IGNORE INTO briefing_settings (id, updated_at) VALUES (1, ?)",
+            (_utc_now(),),
+        )
 
 
 def canonical_signal_scoring_config_json(config: dict[str, Any]) -> str:
