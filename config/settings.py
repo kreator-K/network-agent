@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 
 load_dotenv()
+load_dotenv(".env.local", override=True)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -32,6 +33,26 @@ class Settings:
     )
     followup_cadence_days: int = int(os.getenv("FOLLOWUP_CADENCE_DAYS", "21"))
     database_path: str = os.getenv("DATABASE_PATH", "network_agent.db")
+    generate_image_for_draft_posts: bool = _env_bool(
+        "GENERATE_IMAGE_FOR_DRAFT_POSTS",
+        False,
+    )
+    public_signal_allow_http: bool = _env_bool("PUBLIC_SIGNAL_ALLOW_HTTP", False)
+    public_signal_connect_timeout_seconds: int = int(
+        os.getenv("PUBLIC_SIGNAL_CONNECT_TIMEOUT_SECONDS", "5")
+    )
+    public_signal_read_timeout_seconds: int = int(
+        os.getenv("PUBLIC_SIGNAL_READ_TIMEOUT_SECONDS", "15")
+    )
+    public_signal_max_response_bytes: int = int(
+        os.getenv("PUBLIC_SIGNAL_MAX_RESPONSE_BYTES", "1000000")
+    )
+    public_signal_max_items_per_fetch: int = int(
+        os.getenv("PUBLIC_SIGNAL_MAX_ITEMS_PER_FETCH", "50")
+    )
+    public_signal_max_redirects: int = int(
+        os.getenv("PUBLIC_SIGNAL_MAX_REDIRECTS", "3")
+    )
 
 
 settings = Settings()

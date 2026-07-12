@@ -1,5 +1,6 @@
 """Relationship tracking and CRM agent."""
 
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,6 +11,7 @@ from db.models import (
     CalendarBlock,
     Interaction,
     InteractionDirection,
+    InteractionStatus,
     InteractionType,
     Prospect,
     ProspectStatus,
@@ -30,6 +32,10 @@ class InvalidProspectStatusError(RelationshipTrackerError):
 
 class InvalidInteractionError(RelationshipTrackerError):
     """Raised when an invalid interaction payload is requested."""
+
+
+class InvalidCalendarBlockError(RelationshipTrackerError):
+    """Raised when a calendar block cannot be updated."""
 
 
 class RelationshipTrackerAgent:
@@ -88,10 +94,14 @@ class RelationshipTrackerAgent:
         interaction_type: InteractionType,
         content: str | None = None,
         direction: InteractionDirection = "outbound_draft",
+        status: InteractionStatus | None = None,
+        source: str | None = None,
     ) -> Interaction:
         """Log an interaction and update last-touch date when appropriate."""
         _validate_interaction_type(interaction_type)
         _validate_direction(direction)
+        if status is not None:
+            _validate_interaction_status(status)
         now = _utc_now()
         with connect(self.database_path) as connection:
             self._ensure_prospect_exists(connection, prospect_id)
@@ -102,13 +112,29 @@ class RelationshipTrackerAgent:
                     interaction_type,
                     content,
                     direction,
-                    created_at
+                    status,
+                    source,
+                    created_at,
+                    updated_at
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (prospect_id, interaction_type, content, direction, now),
+                (
+                    prospect_id,
+                    interaction_type,
+                    content,
+                    direction,
+                    status,
+                    source,
+                    now,
+                    now,
+                ),
             )
-            if direction == "outbound_draft" or interaction_type == "reply_logged":
+            if _should_update_last_touch(
+                direction=direction,
+                interaction_type=interaction_type,
+                status=status,
+            ):
                 connection.execute(
                     """
                     UPDATE prospects
@@ -171,6 +197,138 @@ class RelationshipTrackerAgent:
             ).fetchall()
         return [_interaction_from_row(row) for row in rows]
 
+    def update_interaction_status(
+        self,
+        interaction_id: int,
+        status: InteractionStatus,
+    ) -> Interaction:
+        """Update draft lifecycle status for an existing interaction."""
+        _validate_interaction_status(status)
+        now = _utc_now()
+        with connect(self.database_path) as connection:
+            row = connection.execute(
+                "SELECT * FROM interactions WHERE id = ?",
+                (interaction_id,),
+            ).fetchone()
+            if row is None:
+                raise InvalidInteractionError(
+                    f"Interaction id {interaction_id} does not exist."
+                )
+            connection.execute(
+                """
+                UPDATE interactions
+                SET status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (status, now, interaction_id),
+            )
+            return self._get_interaction(connection, interaction_id)
+
+    def mark_outreach_manually_sent(
+        self,
+        prospect_id: int,
+        draft_interaction_id: int | None = None,
+        ask_type: str | None = None,
+        draft_text: str | None = None,
+        source: str = "telegram_button",
+    ) -> Prospect:
+        """Atomically record an explicit user-sent outreach action."""
+        now = _utc_now()
+        content = json.dumps(
+            {
+                "status": "sent_manually",
+                "ask_type": ask_type,
+                "draft_text": draft_text,
+                "source": source,
+            },
+            sort_keys=True,
+        )
+        with connect(self.database_path) as connection:
+            self._ensure_prospect_exists(connection, prospect_id)
+            if draft_interaction_id is not None:
+                draft = connection.execute(
+                    "SELECT prospect_id, status FROM interactions WHERE id = ?",
+                    (draft_interaction_id,),
+                ).fetchone()
+                if draft is None or draft["prospect_id"] != prospect_id:
+                    raise InvalidInteractionError(
+                        "The outreach draft does not belong to this prospect."
+                    )
+                if draft["status"] not in {"drafted", "sent_manually"}:
+                    raise InvalidInteractionError(
+                        "This outreach draft is no longer available for sending."
+                    )
+                connection.execute(
+                    """
+                    UPDATE interactions
+                    SET status = 'sent_manually', updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, draft_interaction_id),
+                )
+
+            existing = connection.execute(
+                """
+                SELECT id FROM interactions
+                WHERE prospect_id = ?
+                    AND interaction_type = 'linkedin_connection_request'
+                    AND status = 'sent_manually'
+                    AND source = ?
+                    AND content = ?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (prospect_id, source, content),
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO interactions (
+                        prospect_id, interaction_type, content, direction,
+                        status, source, created_at, updated_at
+                    )
+                    VALUES (?, 'linkedin_connection_request', ?, 'outbound_draft',
+                        'sent_manually', ?, ?, ?)
+                    """,
+                    (prospect_id, content, source, now, now),
+                )
+            connection.execute(
+                """
+                UPDATE prospects
+                SET status = 'connection_sent', last_touch_date = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, now, prospect_id),
+            )
+            return self._get_prospect(connection, prospect_id)
+
+    def update_calendar_block_sync(
+        self,
+        calendar_block_id: int,
+        event_id: str | None,
+        status: str,
+    ) -> CalendarBlock:
+        """Persist the calendar provider result for an existing block."""
+        if status not in {"confirmed", "calendar_created", "calendar_failed"}:
+            raise ValueError("Invalid calendar block status.")
+        with connect(self.database_path) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE calendar_blocks
+                SET external_event_id = ?, status = ?
+                WHERE id = ?
+                """,
+                (event_id, status, calendar_block_id),
+            )
+            if cursor.rowcount != 1:
+                raise InvalidCalendarBlockError(
+                    f"Calendar block id {calendar_block_id} does not exist."
+                )
+            row = connection.execute(
+                "SELECT * FROM calendar_blocks WHERE id = ?",
+                (calendar_block_id,),
+            ).fetchone()
+        return _calendar_block_from_row(row)
+
     def get_prospect(self, prospect_id: int) -> Prospect:
         """Return a single prospect by ID."""
         with connect(self.database_path) as connection:
@@ -230,11 +388,14 @@ class RelationshipTrackerAgent:
                     interaction_type,
                     content,
                     direction,
-                    created_at
+                    status,
+                    source,
+                    created_at,
+                    updated_at
                 )
-                VALUES (?, 'meeting_confirmed', ?, 'inbound_logged', ?)
+                VALUES (?, 'meeting_confirmed', ?, 'inbound_logged', NULL, NULL, ?, ?)
                 """,
-                (prospect_id, notes, now),
+                (prospect_id, notes, now, now),
             )
             calendar_block_id = _required_lastrowid(cursor)
             row = connection.execute(
@@ -347,6 +508,25 @@ def _validate_direction(direction: str) -> None:
         )
 
 
+def _validate_interaction_status(status: str) -> None:
+    if status not in get_args(InteractionStatus):
+        allowed = ", ".join(get_args(InteractionStatus))
+        raise InvalidInteractionError(
+            f"Invalid interaction status '{status}'. Allowed values: {allowed}."
+        )
+
+
+def _should_update_last_touch(
+    *,
+    direction: str,
+    interaction_type: str,
+    status: str | None,
+) -> bool:
+    if status in {"drafted", "discarded"}:
+        return False
+    return direction == "outbound_draft" or interaction_type == "reply_logged"
+
+
 def _prospect_from_row(row: sqlite3.Row) -> Prospect:
     return Prospect(
         id=row["id"],
@@ -371,7 +551,10 @@ def _interaction_from_row(row: sqlite3.Row) -> Interaction:
         interaction_type=cast(InteractionType, row["interaction_type"]),
         content=row["content"],
         direction=cast(InteractionDirection, row["direction"]),
+        status=cast(InteractionStatus | None, row["status"]),
+        source=row["source"],
         created_at=row["created_at"],
+        updated_at=row["updated_at"],
     )
 
 
@@ -385,6 +568,7 @@ def _calendar_block_from_row(row: sqlite3.Row) -> CalendarBlock:
         timezone=row["timezone"],
         notes=row["notes"],
         external_event_id=row["external_event_id"],
+        status=row["status"] if "status" in row.keys() else "confirmed",
         created_at=row["created_at"],
     )
 

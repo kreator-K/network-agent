@@ -1,13 +1,15 @@
 """Thin Telegram command handlers for Network Growth Agent."""
 
 import logging
+import json
+import shlex
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from agents.orchestrator import NetworkOrchestrator
+from agents.orchestrator import NetworkOrchestrator, NetworkOrchestratorError
 from agents.system_integrity_agent import SystemIntegrityAgent
 from config.settings import settings
 
@@ -15,6 +17,25 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 ALLOWED_ASK_TYPES = {"resume_review", "career_guidance", "general_chat"}
 PHOTO_UPLOAD_DIR = Path("/tmp/network-agent-telegram-photos")
+OUTREACH_OUTCOMES = {
+    "replied_positive",
+    "replied_neutral",
+    "replied_negative",
+    "no_reply",
+    "meeting_booked",
+    "not_relevant",
+    "manually_sent",
+    "custom_note",
+}
+CONTENT_OUTCOMES = {
+    "good_engagement",
+    "low_engagement",
+    "comments_positive",
+    "comments_negative",
+    "saved_for_later",
+    "discarded",
+    "custom_note",
+}
 
 
 async def start(update: Any, context: Any) -> None:
@@ -32,6 +53,31 @@ async def start(update: Any, context: Any) -> None:
                 "/meeting_confirmed <prospect_id> <date:YYYY-MM-DD> <start_time:HH:MM> [end_time:HH:MM]",
                 "/draft_post <topic>",
                 "/pending_drafts",
+                "/brand_profile",
+                "/brand_profile_versions",
+                "/activate_brand_profile <version>",
+                "/set_brand_field <field> | <value>",
+                "/add_signal_source <name> | <rss_or_atom_url>",
+                "/signal_sources",
+                "/approve_signal_source <source_id>",
+                "/reject_signal_source <source_id>",
+                "/enable_signal_source <source_id>",
+                "/disable_signal_source <source_id>",
+                "/scan_signal_source <source_id>",
+                "/scan_signals",
+                "/signals",
+                "/signal <signal_id>",
+                "/score_signal <signal_id>",
+                "/score_signals [limit]",
+                "/ranked_signals",
+                "/content_opportunities",
+                "/content_opportunity <opportunity_id>",
+                "/record_outcome <outreach|content> <id> <outcome> [notes]",
+                "/suggest_refinements",
+                "/refinement_status",
+                "/refinement_report",
+                "/rollback_refinement <refinement_id>",
+                "/refinement_history",
                 "/system_check",
             ]
         ),
@@ -85,15 +131,33 @@ async def draft_outreach(update: Any, context: Any) -> None:
         await _reply(update, "prospect_id must be a number.")
         return
 
-    result = _orchestrator(context).draft_outreach(
+    try:
+        result = _orchestrator(context).draft_outreach(
+            prospect_id=prospect_id,
+            ask_type=ask_type,
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(
+            update,
+            f"Could not draft outreach for prospect_id={prospect_id}. "
+            "Please check the prospect ID.",
+        )
+        return
+    _store_outreach_draft_context(
+        context,
         prospect_id=prospect_id,
+        interaction_id=_get_value(result, "draft_interaction_id"),
         ask_type=ask_type,
-        database=_database(context),
+        draft_text=str(result["draft"].get("draft_text", "")),
     )
     await _reply(
         update,
         _format_outreach_draft(result),
-        reply_markup=_outreach_approval_markup(prospect_id),
+        reply_markup=_outreach_approval_markup(
+            prospect_id,
+            _get_value(result, "draft_interaction_id"),
+        ),
     )
 
 
@@ -104,14 +168,25 @@ async def draft_followup(update: Any, context: Any) -> None:
         await _reply(update, "Usage: /draft_followup <prospect_id>")
         return
 
-    result = _orchestrator(context).draft_followup(
-        prospect_id=prospect_id,
-        database=_database(context),
-    )
+    try:
+        result = _orchestrator(context).draft_followup(
+            prospect_id=prospect_id,
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(
+            update,
+            f"Could not draft follow-up for prospect_id={prospect_id}. "
+            "Please check the prospect ID.",
+        )
+        return
     await _reply(
         update,
         _format_outreach_draft(result),
-        reply_markup=_outreach_approval_markup(prospect_id),
+        reply_markup=_outreach_approval_markup(
+            prospect_id,
+            _get_value(result, "draft_interaction_id"),
+        ),
     )
 
 
@@ -159,59 +234,487 @@ async def meeting_confirmed(update: Any, context: Any) -> None:
 
 
 async def draft_post(update: Any, context: Any) -> None:
-    """Draft a content post without image unless a photo reply is used."""
+    """Draft a content post with optional pending uploaded/generated image."""
     topic = _command_payload(update).strip()
     if not topic:
         await _reply(update, "Usage: /draft_post <topic>")
         return
+    pending_image = _pop_pending_content_image(context)
+    user_image_path = pending_image.get("image_path")
     result = _orchestrator(context).draft_content_post(
         topic=topic,
         inspiration_notes=None,
-        user_image_path=None,
-        generate_image=False,
+        user_image_path=user_image_path,
+        generate_image=_generate_image_enabled(context) and user_image_path is None,
         database=_database(context),
     )
     post = result["post"]
     await _reply(
         update,
-        f"Draft post #{_get_value(post, 'id')}:\n{_get_value(post, 'draft_text')}",
+        _format_post_draft_response(post),
         reply_markup=_post_approval_markup(_get_value(post, "id")),
     )
 
 
 async def photo_reply(update: Any, context: Any) -> None:
-    """Save a replied photo and create a draft post using that uploaded image."""
-    topic = _photo_topic(update)
-    if not topic:
-        await _reply(update, "Reply to a draft-post prompt with a photo and topic text.")
+    """Store uploaded photo context for the next `/draft_post` command."""
+    if not getattr(update.effective_message, "photo", None):
+        await _reply(
+            update,
+            "Unsupported image type. Please upload a standard Telegram photo.",
+        )
         return
     user_image_path = await _save_largest_photo(update)
-    result = _orchestrator(context).draft_content_post(
-        topic=topic,
-        inspiration_notes=None,
-        user_image_path=user_image_path,
-        generate_image=False,
-        database=_database(context),
+    _store_pending_content_image(
+        context,
+        image_path=user_image_path,
+        caption=getattr(update.effective_message, "caption", None),
     )
-    post = result["post"]
     await _reply(
         update,
-        f"Draft post #{_get_value(post, 'id')} with uploaded image:\n{_get_value(post, 'draft_text')}",
-        reply_markup=_post_approval_markup(_get_value(post, "id")),
+        "Image saved for your next /draft_post.",
     )
 
 
 async def pending_drafts(update: Any, context: Any) -> None:
-    """Show pending content drafts."""
-    drafts = _orchestrator(context).get_pending_content_drafts(database=_database(context))
-    if not drafts:
-        await _reply(update, "No pending drafts.")
+    """Show pending outreach and content drafts."""
+    drafts = _orchestrator(context).get_pending_drafts(database=_database(context))
+    outreach = drafts.get("outreach", [])
+    content = drafts.get("content", [])
+    if not outreach and not content:
+        await _reply(update, "No pending drafts right now.")
         return
-    lines = [
-        f"#{draft.get('id')}: {draft.get('draft_text', '')}"
-        for draft in drafts
-    ]
+    lines = _format_pending_drafts(outreach, content)
     await _reply(update, "\n".join(lines))
+
+
+async def brand_profile(update: Any, context: Any) -> None:
+    """Display the concise active personal-brand profile summary."""
+    try:
+        summary = _orchestrator(context).get_brand_profile_summary(
+            database=_database(context)
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load the personal-brand profile.")
+        return
+    if summary is None:
+        await _reply(
+            update,
+            "No personal-brand profile is configured. Initialize the profile seed first.",
+        )
+        return
+    await _reply(update, _format_brand_profile_summary(summary))
+
+
+async def brand_profile_versions(update: Any, context: Any) -> None:
+    """Display recent immutable personal-brand profile versions."""
+    try:
+        versions = _orchestrator(context).list_brand_profile_versions(
+            database=_database(context),
+            limit=10,
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load personal-brand profile versions.")
+        return
+    if not versions:
+        await _reply(
+            update,
+            "No personal-brand profile versions exist. Initialize the profile seed first.",
+        )
+        return
+    await _reply(update, _format_brand_profile_versions(versions))
+
+
+async def activate_brand_profile(update: Any, context: Any) -> None:
+    """Activate an immutable profile version by version number."""
+    version = _parse_int(_command_payload(update).strip(), "version")
+    if version is None:
+        await _reply(update, "Usage: /activate_brand_profile <version>")
+        return
+    try:
+        result = _orchestrator(context).activate_brand_profile(
+            version=version,
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(
+            update,
+            f"Could not activate personal-brand profile version {version}. Please check the version.",
+        )
+        return
+    await _reply(
+        update,
+        f"Personal-brand profile version {result['version']} is now active.",
+    )
+
+
+async def set_brand_field(update: Any, context: Any) -> None:
+    """Create a new personal-brand version from one supported field edit."""
+    raw_payload = _command_payload(update)
+    if "|" not in raw_payload:
+        await _reply(update, "Usage: /set_brand_field <field> | <value>")
+        return
+    field_name, value = (part.strip() for part in raw_payload.split("|", 1))
+    if not field_name or not value:
+        await _reply(update, "Usage: /set_brand_field <field> | <value>")
+        return
+    try:
+        result = _orchestrator(context).update_brand_profile_field(
+            field_name=field_name,
+            value=value,
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(
+            update,
+            "Could not update that personal-brand field. Check the field name and value.",
+        )
+        return
+    await _reply(
+        update,
+        f"Created and activated personal-brand profile version {result['version']}.",
+    )
+
+
+async def add_signal_source(update: Any, context: Any) -> None:
+    """Create a pending RSS or Atom source through the orchestrator."""
+    raw_payload = _command_payload(update)
+    if "|" not in raw_payload:
+        await _reply(update, "Usage: /add_signal_source <name> | <rss_or_atom_url>")
+        return
+    name, url = (part.strip() for part in raw_payload.split("|", 1))
+    if not name or not url:
+        await _reply(update, "Usage: /add_signal_source <name> | <rss_or_atom_url>")
+        return
+    try:
+        source = _orchestrator(context).add_signal_source(
+            name=name,
+            url=url,
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not add that signal source. Check the public feed URL.")
+        return
+    await _reply(
+        update,
+        f"Signal source added as pending approval. Source ID: {source['id']}.",
+    )
+
+
+async def signal_sources(update: Any, context: Any) -> None:
+    """List stored public feed sources."""
+    try:
+        sources = _orchestrator(context).list_signal_sources(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load signal sources.")
+        return
+    if not sources:
+        await _reply(update, "No signal sources have been added.")
+        return
+    await _reply(update, _format_signal_sources(sources))
+
+
+async def approve_signal_source(update: Any, context: Any) -> None:
+    """Approve one source without starting a scan."""
+    await _set_signal_source_approval(update, context, "approved")
+
+
+async def reject_signal_source(update: Any, context: Any) -> None:
+    """Reject one source and leave it disabled."""
+    await _set_signal_source_approval(update, context, "rejected")
+
+
+async def enable_signal_source(update: Any, context: Any) -> None:
+    """Enable one approved source for future manual scans."""
+    await _set_signal_source_enabled(update, context, True)
+
+
+async def disable_signal_source(update: Any, context: Any) -> None:
+    """Disable one source without deleting its audit record."""
+    await _set_signal_source_enabled(update, context, False)
+
+
+async def scan_signal_source(update: Any, context: Any) -> None:
+    """Manually fetch and ingest one approved enabled source."""
+    source_id = _parse_int(_command_payload(update).strip(), "source_id")
+    if source_id is None:
+        await _reply(update, "Usage: /scan_signal_source <source_id>")
+        return
+    try:
+        result = _orchestrator(context).scan_signal_source(
+            source_id=source_id,
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not scan that signal source. Check approval and enabled state.")
+        return
+    await _reply(update, _format_signal_scan(result))
+
+
+async def scan_signals(update: Any, context: Any) -> None:
+    """Manually scan all approved enabled sources without scheduling."""
+    try:
+        result = _orchestrator(context).scan_enabled_signal_sources(
+            database=_database(context)
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not scan enabled signal sources.")
+        return
+    await _reply(
+        update,
+        "Scanned {sources_scanned} sources. New signals: {new_signals}. "
+        "Duplicates: {duplicates}. Failures: {failures}.".format(**result),
+    )
+
+
+async def signals(update: Any, context: Any) -> None:
+    """Display recent deterministic signals without relevance scoring."""
+    try:
+        recent = _orchestrator(context).get_recent_signals(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load stored signals.")
+        return
+    if not recent:
+        await _reply(update, "No signals have been stored yet.")
+        return
+    await _reply(update, _format_signals(recent))
+
+
+async def signal(update: Any, context: Any) -> None:
+    """Display one attributed signal without downstream content actions."""
+    signal_id = _parse_int(_command_payload(update).strip(), "signal_id")
+    if signal_id is None:
+        await _reply(update, "Usage: /signal <signal_id>")
+        return
+    try:
+        item = _orchestrator(context).get_signal(
+            signal_id=signal_id,
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, f"Could not find signal id={signal_id}.")
+        return
+    await _reply(update, _format_signal(item))
+
+
+async def score_signal(update: Any, context: Any) -> None:
+    """Score one stored signal; this command never scans a source."""
+    signal_id = _parse_int(_command_payload(update).strip(), "signal_id")
+    if signal_id is None:
+        await _reply(update, "Usage: /score_signal <signal_id>")
+        return
+    try:
+        result = _orchestrator(context).score_signal(signal_id=signal_id, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, f"Could not score signal id={signal_id}. Check the stored signal ID.")
+        return
+    await _reply(update, _format_scoring_result(result))
+
+
+async def score_signals(update: Any, context: Any) -> None:
+    """Run a bounded scoring pass over existing normalized signals only."""
+    payload = _command_payload(update).strip()
+    limit = 10 if not payload else _parse_int(payload, "limit")
+    if limit is None or limit < 1:
+        await _reply(update, "Usage: /score_signals [positive_limit]")
+        return
+    try:
+        result = _orchestrator(context).score_recent_signals(limit=limit, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not score stored signals right now.")
+        return
+    await _reply(update, _format_scoring_run(result))
+
+
+async def ranked_signals(update: Any, context: Any) -> None:
+    """Show stored scores in review order without creating any draft."""
+    try:
+        ranked = _orchestrator(context).get_ranked_signals(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load ranked signals.")
+        return
+    await _reply(update, _format_ranked_signals(ranked) if ranked else "No scored signals yet.")
+
+
+async def content_opportunities(update: Any, context: Any) -> None:
+    """Show reviewable pre-draft opportunities and their human actions."""
+    try:
+        opportunities = _orchestrator(context).list_content_opportunities(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load content opportunities.")
+        return
+    if not opportunities:
+        await _reply(update, "No content opportunities yet. Score qualifying stored signals first.")
+        return
+    for item in opportunities:
+        await _reply(update, _format_content_opportunity(item), reply_markup=_opportunity_markup(item["id"]))
+
+
+async def content_opportunity(update: Any, context: Any) -> None:
+    """Show a single opportunity detail without producing a post draft."""
+    opportunity_id = _parse_int(_command_payload(update).strip(), "opportunity_id")
+    if opportunity_id is None:
+        await _reply(update, "Usage: /content_opportunity <opportunity_id>")
+        return
+    try:
+        item = _orchestrator(context).get_content_opportunity(opportunity_id=opportunity_id, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, f"Could not find content opportunity id={opportunity_id}.")
+        return
+    await _reply(update, _format_content_opportunity(item, detailed=True), reply_markup=_opportunity_markup(opportunity_id))
+
+
+async def record_outcome(update: Any, context: Any) -> None:
+    """Record an explicit user-reported outcome for refinement."""
+    parsed = _parse_record_outcome_payload(_command_payload(update))
+    if parsed is None:
+        await _reply(
+            update,
+            "Usage: /record_outcome <outreach|content> <id> <outcome> [notes]",
+        )
+        return
+    target_type, target_id, outcome, notes = parsed
+    valid_outcomes = OUTREACH_OUTCOMES if target_type == "outreach" else CONTENT_OUTCOMES
+    if outcome not in valid_outcomes:
+        await _reply(
+            update,
+            f"Invalid {target_type} outcome. Use one of: {', '.join(sorted(valid_outcomes))}.",
+        )
+        return
+    try:
+        result = _orchestrator(context).record_outcome(
+            target_type=target_type,
+            target_id=target_id,
+            outcome=outcome,
+            notes=notes,
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(
+            update,
+            f"Could not record {target_type} outcome for id={target_id}. Please check the ID.",
+        )
+        return
+    await _reply(
+        update,
+        (
+            f"Outcome recorded for {target_type} id={target_id}: {outcome}. "
+            f"Refinement outcome id={result.get('id')}."
+        ),
+    )
+
+
+async def suggest_refinements(update: Any, context: Any) -> None:
+    """Run report-only refinement suggestions without applying them."""
+    try:
+        report = _orchestrator(context).suggest_refinements(
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not suggest refinements right now.")
+        return
+    suggestions = report.get("suggestions", [])
+    if not suggestions:
+        await _reply(update, _format_refinement_report(report))
+        return
+    _store_refinement_proposals(context, suggestions)
+    await _reply(
+        update,
+        _format_refinement_report(report),
+        reply_markup=_refinement_markup(suggestions),
+    )
+
+
+async def rollback_refinement(update: Any, context: Any) -> None:
+    """Rollback one applied refinement by refinement_history id."""
+    payload = _command_payload(update).strip()
+    refinement_id = _parse_int(payload, "refinement_id")
+    if refinement_id is None:
+        await _reply(update, "Usage: /rollback_refinement <refinement_id>")
+        return
+    try:
+        result = _orchestrator(context).rollback_refinement(
+            refinement_id=refinement_id,
+            database=_database(context),
+        )
+    except NetworkOrchestratorError as exc:
+        message = str(exc)
+        if "parameter has changed since it was applied" in message:
+            await _reply(
+                update,
+                "This refinement cannot be rolled back automatically because the parameter has changed since it was applied. Please review manually.",
+            )
+        elif "does not exist" in message:
+            await _reply(
+                update,
+                f"Could not rollback refinement_id={refinement_id}. Please check the refinement ID.",
+            )
+        elif "Only applied refinements" in message:
+            await _reply(update, "Only applied refinements can be rolled back.")
+        elif "missing rollback values" in message:
+            await _reply(
+                update,
+                "This refinement is missing rollback values. Please review manually.",
+            )
+        elif "not refinable" in message:
+            await _reply(
+                update,
+                "Rollback target parameter is not currently refinable. Please review manually.",
+            )
+        elif "failed validation" in message or "checker" in message:
+            await _reply(update, "Rollback failed safety validation. No changes were applied.")
+        else:
+            await _reply(update, "Could not rollback refinement. No changes were applied.")
+        return
+    await _reply(
+        update,
+        (
+            f"Rollback applied for {result.get('parameter_name')}. "
+            "Restored previous value. Core intent was not changed."
+        ),
+    )
+
+
+async def refinement_status(update: Any, context: Any) -> None:
+    """Show read-only refinement loop status."""
+    try:
+        status = _orchestrator(context).get_refinement_status(
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load refinement status right now.")
+        return
+    await _reply(update, _format_refinement_status(status))
+
+
+async def refinement_report(update: Any, context: Any) -> None:
+    """Show read-only refinement reporting summary."""
+    try:
+        report = _orchestrator(context).get_refinement_report(
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load refinement report right now.")
+        return
+    await _reply(update, _format_refinement_reporting_summary(report))
+
+
+async def refinement_history(update: Any, context: Any) -> None:
+    """Show recent refinement audit events."""
+    try:
+        history = _orchestrator(context).get_refinement_history(
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not load refinement history right now.")
+        return
+    if not history:
+        await _reply(update, "No refinement history yet.")
+        return
+    await _reply(
+        update,
+        _format_refinement_history(history),
+    )
 
 
 async def system_check(update: Any, context: Any) -> None:
@@ -229,26 +732,173 @@ async def button_callback(update: Any, context: Any) -> None:
     query = update.callback_query
     await query.answer()
     data = query.data or ""
-    if data.startswith("outreach_sent:"):
-        prospect_id = int(data.split(":", 1)[1])
-        _orchestrator(context).mark_outreach_sent(
-            prospect_id=prospect_id,
-            database=_database(context),
-        )
+    if data.startswith("outreach_manual_sent:") or data.startswith("manual_sent:"):
+        callback = _parse_outreach_callback(data)
+        if callback is None:
+            await query.edit_message_text(
+                "Invalid outreach action. Please draft again."
+            )
+            return
+        draft_context = _pop_outreach_draft_context(context, callback["prospect_id"])
+        try:
+            _orchestrator(context).mark_outreach_sent(
+                prospect_id=callback["prospect_id"],
+                ask_type=draft_context.get("ask_type"),
+                draft_text=draft_context.get("draft_text"),
+                source="telegram_button",
+                draft_interaction_id=callback.get("interaction_id"),
+                database=_database(context),
+            )
+        except NetworkOrchestratorError:
+            await query.edit_message_text(
+                f"Could not mark prospect_id={callback['prospect_id']} as manually sent. "
+                "Please check the prospect ID."
+            )
+            return
         await query.edit_message_text(
-            f"Outreach marked sent for prospect {prospect_id}."
+            "Marked as manually sent on LinkedIn. I'll track this for follow-up."
         )
+        return
+    if data.startswith("outreach_discard:"):
+        interaction_id = _callback_id(data, "outreach_discard")
+        if interaction_id is None:
+            await query.edit_message_text("Invalid outreach action. Please draft again.")
+            return
+        try:
+            _orchestrator(context).discard_outreach_draft(
+                interaction_id=interaction_id,
+                database=_database(context),
+            )
+        except NetworkOrchestratorError:
+            await query.edit_message_text(
+                "Could not discard that outreach draft. Please draft again."
+            )
+            return
+        await query.edit_message_text("Discarded draft.")
+        return
+    if data.startswith("post_save:"):
+        post_id = _callback_id(data, "post_save")
+        if post_id is None:
+            await query.edit_message_text("Invalid content draft action. Please draft again.")
+            return
+        try:
+            _orchestrator(context).save_content_draft(
+                post_id=post_id,
+                database=_database(context),
+            )
+        except NetworkOrchestratorError:
+            await query.edit_message_text(
+                "Could not save that content draft. Please draft again."
+            )
+            return
+        await query.edit_message_text("Saved as draft.")
+        return
+    if data.startswith("post_approve_later:"):
+        post_id = _callback_id(data, "post_approve_later")
+        if post_id is None:
+            await query.edit_message_text("Invalid content draft action. Please draft again.")
+            return
+        try:
+            _orchestrator(context).approve_content_draft_for_later_posting(
+                post_id=post_id,
+                database=_database(context),
+            )
+        except NetworkOrchestratorError:
+            await query.edit_message_text(
+                "Could not approve that content draft. Please draft again."
+            )
+            return
+        await query.edit_message_text("Marked approved for later posting.")
+        return
+    if data.startswith("post_discard:"):
+        post_id = _callback_id(data, "post_discard")
+        if post_id is None:
+            await query.edit_message_text("Invalid content draft action. Please draft again.")
+            return
+        try:
+            _orchestrator(context).discard_content_draft(
+                post_id=post_id,
+                database=_database(context),
+            )
+        except NetworkOrchestratorError:
+            await query.edit_message_text(
+                "Could not discard that content draft. Please draft again."
+            )
+            return
+        await query.edit_message_text("Discarded draft.")
+        return
+    if data.startswith("opportunity_"):
+        await _handle_opportunity_callback(query, context, data)
+        return
+    if data.startswith("refinement_apply:"):
+        proposal_id = _callback_token(data, "refinement_apply")
+        if proposal_id is None:
+            await query.edit_message_text("Invalid refinement action. Please suggest again.")
+            return
+        try:
+            _orchestrator(context).apply_refinement_proposal(
+                proposal_id=proposal_id,
+                database=_database(context),
+            )
+        except NetworkOrchestratorError as exc:
+            message = str(exc)
+            if "report-only" in message:
+                await query.edit_message_text(
+                    "The refinement loop is currently report-only. No changes were applied."
+                )
+            elif "already applied" in message:
+                await query.edit_message_text("This refinement was already applied.")
+            elif "already rejected" in message:
+                await query.edit_message_text("This refinement was already rejected.")
+            elif "stale" in message:
+                await query.edit_message_text(
+                    "This proposal is stale because the parameter changed. Please run /suggest_refinements again."
+                )
+            else:
+                await query.edit_message_text("Could not apply refinement. No changes were made.")
+            return
+        await query.edit_message_text("Refinement applied. Core intent was not changed.")
+        return
+    if data.startswith("refinement_reject:"):
+        proposal_id = _callback_token(data, "refinement_reject")
+        if proposal_id is None:
+            await query.edit_message_text("Invalid refinement action. Please suggest again.")
+            return
+        try:
+            _orchestrator(context).reject_refinement_proposal(
+                proposal_id=proposal_id,
+                database=_database(context),
+            )
+        except NetworkOrchestratorError as exc:
+            message = str(exc)
+            if "already applied" in message:
+                await query.edit_message_text("This refinement was already applied.")
+            elif "already rejected" in message:
+                await query.edit_message_text("This refinement was already rejected.")
+            else:
+                await query.edit_message_text("Could not reject refinement. No changes were made.")
+            return
+        await query.edit_message_text("Refinement rejected. No changes were made.")
+        return
+    if data.startswith("refinement_reason:"):
+        proposal_id = _callback_token(data, "refinement_reason")
+        if proposal_id is None:
+            await query.edit_message_text("Invalid refinement action. Please suggest again.")
+            return
+        try:
+            proposal = _orchestrator(context).get_refinement_reasoning(
+                proposal_id=proposal_id,
+                database=_database(context),
+            )
+        except NetworkOrchestratorError:
+            await query.edit_message_text("Missing refinement proposal. Please suggest again.")
+            return
+        await query.edit_message_text(_format_refinement_reasoning(proposal))
         return
     if data == "discard":
-        await query.edit_message_text("Discarded.")
+        await query.edit_message_text("Invalid draft action. Please draft again.")
         return
-    if data.startswith("post_approve:"):
-        await query.edit_message_text("Post approved for future publishing flow.")
-        return
-    if data.startswith("post_regenerate:"):
-        await query.edit_message_text("Regenerate requested.")
-        return
-    await query.edit_message_text("Action received.")
+    await query.edit_message_text("Invalid draft action. Please draft again.")
 
 
 async def handle_error(update: Any, context: Any) -> None:
@@ -266,9 +916,16 @@ def _orchestrator(context: Any) -> Any:
     return bot_data.get("orchestrator") or NetworkOrchestrator()
 
 
-def _database(context: Any) -> str:
+def _bot_data(context: Any) -> dict[str, Any]:
     app = getattr(context, "application", None)
-    bot_data = getattr(app, "bot_data", {}) if app is not None else {}
+    bot_data = getattr(app, "bot_data", None) if app is not None else None
+    if isinstance(bot_data, dict):
+        return bot_data
+    return {}
+
+
+def _database(context: Any) -> str:
+    bot_data = _bot_data(context)
     return str(bot_data.get("database_path") or settings.database_path)
 
 
@@ -298,6 +955,25 @@ def _parse_int(value: str, field_name: str) -> int | None:
         return None
 
 
+def _parse_record_outcome_payload(
+    payload: str,
+) -> tuple[str, int, str, str | None] | None:
+    try:
+        parts = shlex.split(payload)
+    except ValueError:
+        return None
+    if len(parts) < 3:
+        return None
+    target_type = parts[0]
+    if target_type not in {"outreach", "content"}:
+        return None
+    target_id = _parse_int(parts[1], "target_id")
+    if target_id is None:
+        return None
+    notes = " ".join(parts[3:]).strip() or None
+    return target_type, target_id, parts[2], notes
+
+
 def _format_outreach_draft(result: dict[str, Any]) -> str:
     draft = result["draft"]
     lines = [
@@ -317,39 +993,659 @@ def _format_outreach_draft(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _outreach_approval_markup(prospect_id: int) -> InlineKeyboardMarkup:
+def _format_brand_profile_summary(summary: dict[str, Any]) -> str:
+    fields = [
+        ("Professional identity", summary.get("professional_identity")),
+        ("Current program", summary.get("current_program")),
+        ("Institutions", summary.get("institutions")),
+        ("Career focus", summary.get("career_focus")),
+        ("Content pillars", summary.get("content_pillars")),
+        ("Target audiences", summary.get("target_audiences")),
+        ("Preferred tone", summary.get("preferred_tone")),
+        ("Preferred depth", summary.get("preferred_depth")),
+        ("Humor boundaries", summary.get("humor_preferences")),
+        (
+            "Personal-claim safeguards",
+            summary.get("claims_requiring_confirmation"),
+        ),
+        ("Topics to avoid", summary.get("topics_to_avoid")),
+        ("Networking goals", summary.get("networking_goals")),
+    ]
+    lines = [f"Personal-brand profile v{summary.get('version')} (active)"]
+    for label, value in fields:
+        if isinstance(value, list) and value:
+            lines.append(f"{label}: {', '.join(str(item) for item in value)}")
+        elif isinstance(value, str) and value:
+            lines.append(f"{label}: {value}")
+    return "\n".join(lines)
+
+
+def _format_brand_profile_versions(versions: list[dict[str, Any]]) -> str:
+    lines = ["Personal-brand profile versions:"]
+    for profile in versions:
+        marker = " active" if profile.get("is_active") else ""
+        lines.append(
+            "v{version} (id={id}){marker} created={created} activated={activated}".format(
+                version=profile.get("version"),
+                id=profile.get("id"),
+                marker=marker,
+                created=profile.get("created_at"),
+                activated=profile.get("activated_at") or "-",
+            )
+        )
+    return "\n".join(lines)
+
+
+async def _set_signal_source_approval(update: Any, context: Any, status: str) -> None:
+    source_id = _parse_int(_command_payload(update).strip(), "source_id")
+    command = "approve" if status == "approved" else "reject"
+    if source_id is None:
+        await _reply(update, f"Usage: /{command}_signal_source <source_id>")
+        return
+    try:
+        method = (
+            _orchestrator(context).approve_signal_source
+            if status == "approved"
+            else _orchestrator(context).reject_signal_source
+        )
+        source = method(source_id=source_id, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, f"Could not {command} signal source id={source_id}.")
+        return
+    await _reply(update, f"Signal source {source['id']} is {source['approval_status']}.")
+
+
+async def _set_signal_source_enabled(update: Any, context: Any, enabled: bool) -> None:
+    source_id = _parse_int(_command_payload(update).strip(), "source_id")
+    command = "enable" if enabled else "disable"
+    if source_id is None:
+        await _reply(update, f"Usage: /{command}_signal_source <source_id>")
+        return
+    try:
+        source = _orchestrator(context).set_signal_source_enabled(
+            source_id=source_id,
+            enabled=enabled,
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, f"Could not {command} signal source id={source_id}.")
+        return
+    state = "enabled" if source["enabled"] else "disabled"
+    await _reply(update, f"Signal source {source['id']} is {state}.")
+
+
+def _format_signal_sources(sources: list[dict[str, Any]]) -> str:
+    lines = ["Signal sources:"]
+    for source in sources:
+        lines.append(
+            "{id}: {name} [{source_type}] {approval} enabled={enabled} "
+            "last_fetch={last_fetch}".format(
+                id=source.get("id"),
+                name=source.get("name"),
+                source_type=source.get("source_type"),
+                approval=source.get("approval_status"),
+                enabled=source.get("enabled"),
+                last_fetch=source.get("last_fetch_status") or "-",
+            )
+        )
+    return "\n".join(lines)
+
+
+def _format_signal_scan(result: dict[str, Any]) -> str:
+    lines = [
+        f"Signal scan status: {result.get('status')}",
+        f"Items fetched: {result.get('items_fetched')}",
+        f"New signals: {result.get('new_signals')}",
+        f"Duplicates: {result.get('duplicates')}",
+        f"Failures: {result.get('failures')}",
+    ]
+    if result.get("not_modified"):
+        lines.append("Feed was not modified since the prior scan.")
+    if result.get("warnings"):
+        lines.append(f"Warnings: {', '.join(result['warnings'])}")
+    if result.get("errors"):
+        lines.append(f"Errors: {', '.join(result['errors'])}")
+    return "\n".join(lines)
+
+
+def _format_signals(signals: list[dict[str, Any]]) -> str:
+    lines = ["Recent signals:"]
+    for item in signals:
+        lines.append(
+            "{id}: {title} | {source} | {published} | {status}".format(
+                id=item.get("id"),
+                title=item.get("title") or "Untitled",
+                source=item.get("source_name"),
+                published=item.get("published_at") or "date unavailable",
+                status=item.get("status"),
+            )
+        )
+    return "\n".join(lines)
+
+
+def _format_signal(item: dict[str, Any]) -> str:
+    lines = [
+        f"Signal {item.get('id')}: {item.get('title') or 'Untitled'}",
+        f"Source: {item.get('source_name')}",
+        f"Author: {item.get('author') or '-'}",
+        f"Published: {item.get('published_at') or '-'}",
+        f"Status: {item.get('status')}",
+    ]
+    if item.get("summary"):
+        lines.append(f"Summary: {item['summary']}")
+    if item.get("canonical_url"):
+        lines.append(f"URL: {item['canonical_url']}")
+    if item.get("duplicate_of_id"):
+        lines.append(f"Duplicate of signal: {item['duplicate_of_id']}")
+    return "\n".join(lines)
+
+
+def _format_scoring_result(result: dict[str, Any]) -> str:
+    if not result.get("eligible"):
+        return "\n".join([
+            f"Signal: {result.get('title') or result.get('signal_id')}",
+            "Eligibility: ineligible",
+            f"Reasons: {'; '.join(result.get('reasons', []))}",
+            "No opportunity was created.",
+        ])
+    score = result.get("score", {})
+    deterministic = score.get("deterministic", {})
+    return "\n".join([
+        f"Signal: {result.get('title') or result.get('signal_id')}",
+        "Eligibility: eligible",
+        f"Final score: {score.get('final_score', 0):.1f}/100",
+        f"Confidence: {score.get('confidence', 0):.2f}",
+        f"Positive factors: topic {deterministic.get('topic_relevance', 0):.0f}, credibility {deterministic.get('credibility', 0):.0f}",
+        f"Penalties: factual risk {deterministic.get('factual_risk', 0):.0f}, generic risk {deterministic.get('generic_commentary_risk', 0):.0f}",
+        f"Scoring mode: {result.get('mode')}",
+        "No post has been drafted yet.",
+    ])
+
+
+def _format_scoring_run(result: dict[str, Any]) -> str:
+    return (
+        "Stored-signal scoring complete. Considered: {considered}. Eligible: {eligible}. "
+        "Ineligible: {ineligible}. Scored: {scored}. Model-assisted: {model_assisted}. "
+        "Deterministic fallbacks: {deterministic_fallbacks}. Opportunities: {opportunities_created}. Failures: {failures}."
+    ).format(**result)
+
+
+def _format_ranked_signals(items: list[dict[str, Any]]) -> str:
+    lines = ["Ranked signals:"]
+    for item in items:
+        reasons = _json_list(item.get("eligibility_reasons_json"))
+        reason = reasons[0] if reasons else "scored against active brand profile"
+        lines.append(f"{item.get('id')}: {item.get('title') or 'Untitled'} | {item.get('source_name')} | {item.get('total_score', 0):.1f} | {item.get('eligibility_status')} | {reason}")
+    return "\n".join(lines)
+
+
+def _format_content_opportunity(item: dict[str, Any], detailed: bool = False) -> str:
+    references = _json_list(item.get("source_references_json"))
+    lines = [
+        f"Opportunity {item.get('id')}: {item.get('headline')}",
+        f"Angle: {item.get('suggested_angle')}",
+        f"Why it fits: {item.get('rationale')}",
+        f"Audience: {item.get('target_audience')}",
+        f"Score: {item.get('total_score', 0):.1f}/100 | Risk: factual {item.get('factual_risk', 0):.0f}, generic {item.get('generic_commentary_risk', 0):.0f}",
+        f"Sources: {len(references)} | Status: {item.get('status')}",
+    ]
+    if detailed:
+        lines.extend([
+            f"Format: {item.get('recommended_format')}",
+            f"Treatment: {item.get('suggested_treatment')}",
+            f"Confidence: {item.get('confidence', 0):.2f}",
+            "No post has been drafted yet.",
+        ])
+    return "\n".join(lines)
+
+
+async def _handle_opportunity_callback(query: Any, context: Any, data: str) -> None:
+    """Route one pre-draft opportunity action through the orchestrator."""
+    parts = data.split(":", 1)
+    opportunity_id = _parse_int(parts[1], "opportunity_id") if len(parts) == 2 else None
+    if opportunity_id is None:
+        await query.edit_message_text("Invalid or stale content opportunity action.")
+        return
+    action = parts[0]
+    try:
+        orchestrator = _orchestrator(context)
+        if action == "opportunity_view":
+            item = orchestrator.get_content_opportunity(opportunity_id=opportunity_id, database=_database(context))
+            await query.edit_message_text(_format_content_opportunity(item, detailed=True))
+            return
+        if action == "opportunity_save":
+            orchestrator.save_content_opportunity(opportunity_id=opportunity_id, database=_database(context))
+            message = "Content opportunity saved for review. No post was drafted."
+        elif action == "opportunity_select":
+            orchestrator.select_content_opportunity(opportunity_id=opportunity_id, database=_database(context))
+            message = "Content opportunity selected for a future approved drafting phase. No post was drafted."
+        elif action == "opportunity_dismiss":
+            orchestrator.dismiss_content_opportunity(opportunity_id=opportunity_id, database=_database(context))
+            message = "Content opportunity dismissed."
+        elif action == "opportunity_more":
+            orchestrator.record_opportunity_preference(opportunity_id=opportunity_id, feedback_type="more_like_this", database=_database(context))
+            message = "Preference saved: more like this."
+        elif action == "opportunity_less":
+            orchestrator.record_opportunity_preference(opportunity_id=opportunity_id, feedback_type="less_like_this", database=_database(context))
+            message = "Preference saved: less like this."
+        elif action == "opportunity_sources":
+            item = orchestrator.get_content_opportunity(opportunity_id=opportunity_id, database=_database(context))
+            await query.edit_message_text("Sources:\n" + "\n".join(str(ref) for ref in _json_list(item.get("source_references_json"))))
+            return
+        else:
+            await query.edit_message_text("Invalid or stale content opportunity action.")
+            return
+    except NetworkOrchestratorError:
+        await query.edit_message_text("That content opportunity is no longer available. Please refresh the list.")
+        return
+    await query.edit_message_text(message)
+
+
+def _opportunity_markup(opportunity_id: Any) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("View", callback_data=f"opportunity_view:{opportunity_id}"), InlineKeyboardButton("Save", callback_data=f"opportunity_save:{opportunity_id}"), InlineKeyboardButton("Select", callback_data=f"opportunity_select:{opportunity_id}")],
+        [InlineKeyboardButton("Dismiss", callback_data=f"opportunity_dismiss:{opportunity_id}"), InlineKeyboardButton("More Like This", callback_data=f"opportunity_more:{opportunity_id}"), InlineKeyboardButton("Less Like This", callback_data=f"opportunity_less:{opportunity_id}")],
+        [InlineKeyboardButton("Show Sources", callback_data=f"opportunity_sources:{opportunity_id}")],
+    ])
+
+
+def _json_list(raw: Any) -> list[Any]:
+    try:
+        value = json.loads(raw or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _outreach_approval_markup(
+    prospect_id: int,
+    interaction_id: Any,
+) -> InlineKeyboardMarkup:
+    manual_callback = (
+        f"outreach_manual_sent:{prospect_id}:{interaction_id}"
+        if interaction_id is not None
+        else f"manual_sent:{prospect_id}"
+    )
+    discard_callback = (
+        f"outreach_discard:{interaction_id}"
+        if interaction_id is not None
+        else "discard"
+    )
     return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
-                    "Approve & Mark Sent",
-                    callback_data=f"outreach_sent:{prospect_id}",
+                    "Mark as Manually Sent",
+                    callback_data=manual_callback,
                 ),
-                InlineKeyboardButton("Discard", callback_data="discard"),
+                InlineKeyboardButton("Discard Draft", callback_data=discard_callback),
             ]
         ]
     )
+
+
+def _store_outreach_draft_context(
+    context: Any,
+    *,
+    prospect_id: int,
+    interaction_id: Any,
+    ask_type: str | None,
+    draft_text: str | None,
+) -> None:
+    bot_data = _bot_data(context)
+    drafts = bot_data.setdefault("outreach_drafts", {})
+    drafts[str(prospect_id)] = {
+        "interaction_id": str(interaction_id) if interaction_id is not None else None,
+        "ask_type": ask_type,
+        "draft_text": draft_text,
+    }
+
+
+def _pop_outreach_draft_context(context: Any, prospect_id: int) -> dict[str, str | None]:
+    drafts = _bot_data(context).get("outreach_drafts", {})
+    if not isinstance(drafts, dict):
+        return {}
+    draft_context = drafts.pop(str(prospect_id), {})
+    if not isinstance(draft_context, dict):
+        return {}
+    return {
+        "ask_type": draft_context.get("ask_type"),
+        "draft_text": draft_context.get("draft_text"),
+    }
+
+
+def _callback_prospect_id(data: str) -> int | None:
+    try:
+        prefix, prospect_id_text = data.split(":", 1)
+    except ValueError:
+        return None
+    if prefix != "manual_sent":
+        return None
+    return _parse_int(prospect_id_text, "prospect_id")
+
+
+def _parse_outreach_callback(data: str) -> dict[str, int] | None:
+    if data.startswith("manual_sent:"):
+        prospect_id = _callback_prospect_id(data)
+        return {"prospect_id": prospect_id} if prospect_id is not None else None
+    parts = data.split(":")
+    if len(parts) != 3 or parts[0] != "outreach_manual_sent":
+        return None
+    prospect_id = _parse_int(parts[1], "prospect_id")
+    interaction_id = _parse_int(parts[2], "interaction_id")
+    if prospect_id is None or interaction_id is None:
+        return None
+    return {"prospect_id": prospect_id, "interaction_id": interaction_id}
+
+
+def _callback_id(data: str, expected_prefix: str) -> int | None:
+    try:
+        prefix, raw_id = data.split(":", 1)
+    except ValueError:
+        return None
+    if prefix != expected_prefix:
+        return None
+    return _parse_int(raw_id, "callback_id")
+
+
+def _callback_token(data: str, expected_prefix: str) -> str | None:
+    try:
+        prefix, raw_value = data.split(":", 1)
+    except ValueError:
+        return None
+    if prefix != expected_prefix or not raw_value:
+        return None
+    return raw_value
+
+
+def _store_refinement_proposals(
+    context: Any,
+    suggestions: list[dict[str, Any]],
+) -> None:
+    proposals = {}
+    for index, proposal in enumerate(suggestions, start=1):
+        proposals[str(index)] = proposal
+    _bot_data(context)["refinement_proposals"] = proposals
+
+
+def _get_refinement_proposal(context: Any, proposal_id: int) -> dict[str, Any] | None:
+    proposals = _bot_data(context).get("refinement_proposals", {})
+    if not isinstance(proposals, dict):
+        return None
+    proposal = proposals.get(str(proposal_id))
+    return proposal if isinstance(proposal, dict) else None
 
 
 def _post_approval_markup(post_id: Any) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("Approve", callback_data=f"post_approve:{post_id}"),
+                InlineKeyboardButton("Save Draft", callback_data=f"post_save:{post_id}"),
                 InlineKeyboardButton(
-                    "Regenerate",
-                    callback_data=f"post_regenerate:{post_id}",
+                    "Mark Approved for Later Posting",
+                    callback_data=f"post_approve_later:{post_id}",
                 ),
-                InlineKeyboardButton("Discard", callback_data="discard"),
+                InlineKeyboardButton("Discard Draft", callback_data=f"post_discard:{post_id}"),
             ]
         ]
     )
+
+
+def _refinement_markup(suggestions: list[dict[str, Any]]) -> InlineKeyboardMarkup:
+    rows = []
+    for index, suggestion in enumerate(suggestions, start=1):
+        if suggestion.get("status") != "pending_approval":
+            continue
+        proposal_id = suggestion.get("proposal_id")
+        if not proposal_id:
+            continue
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"Apply Refinement {index}",
+                    callback_data=f"refinement_apply:{proposal_id}",
+                ),
+                InlineKeyboardButton(
+                    "Reject Refinement",
+                    callback_data=f"refinement_reject:{proposal_id}",
+                ),
+                InlineKeyboardButton(
+                    "View Reasoning",
+                    callback_data=f"refinement_reason:{proposal_id}",
+                ),
+            ]
+        )
+    return InlineKeyboardMarkup(rows)
+
+
+def _store_pending_content_image(
+    context: Any,
+    *,
+    image_path: str,
+    caption: str | None,
+) -> None:
+    _bot_data(context)["pending_content_image"] = {
+        "image_path": image_path,
+        "caption": caption,
+    }
+
+
+def _pop_pending_content_image(context: Any) -> dict[str, Any]:
+    pending = _bot_data(context).pop("pending_content_image", {})
+    if isinstance(pending, dict):
+        return pending
+    return {}
+
+
+def _generate_image_enabled(context: Any) -> bool:
+    bot_data = _bot_data(context)
+    if "generate_image_for_draft_posts" in bot_data:
+        return bool(bot_data["generate_image_for_draft_posts"])
+    return settings.generate_image_for_draft_posts
+
+
+def _format_post_draft_response(post: Any) -> str:
+    image_source = _get_value(post, "image_source")
+    if image_source == "uploaded":
+        prefix = "Here's a LinkedIn post draft based on your uploaded image."
+    elif image_source == "generated":
+        prefix = "Here's a LinkedIn post draft with a suggested/generated image concept."
+    else:
+        prefix = "Here's a LinkedIn post draft."
+    return f"{prefix}\n\nDraft post #{_get_value(post, 'id')}:\n{_get_value(post, 'draft_text')}"
 
 
 def _format_due_line(item: dict[str, Any]) -> str:
     last_touch = item.get("last_touch_date")
     days = "never" if not last_touch else f"{_days_since(str(last_touch))} days"
     return f"{item.get('name')} (id={item.get('prospect_id')}): last touch {days}"
+
+
+def _format_pending_drafts(
+    outreach: list[dict[str, Any]],
+    content: list[dict[str, Any]],
+) -> list[str]:
+    lines = ["Pending drafts:"]
+    if outreach:
+        lines.append("")
+        lines.append("Outreach drafts:")
+        for draft in outreach:
+            ask_type = draft.get("ask_type") or draft.get("interaction_type")
+            lines.append(
+                "- "
+                f"#{draft.get('id')} "
+                f"{draft.get('prospect_name')} "
+                f"(prospect_id={draft.get('prospect_id')}): "
+                f"{ask_type}, "
+                f"status={draft.get('status')}, "
+                f"created={draft.get('created_at')}"
+            )
+    if content:
+        lines.append("")
+        lines.append("Content drafts:")
+        for draft in content:
+            topic = draft.get("topic") or "Untitled topic"
+            lines.append(
+                "- "
+                f"#{draft.get('id')} "
+                f"{topic}: "
+                f"image={draft.get('image_source')}, "
+                f"status={draft.get('status')}, "
+                f"created={draft.get('created_at')}"
+            )
+    return lines
+
+
+def _format_refinement_suggestions(suggestions: list[dict[str, Any]]) -> str:
+    lines = ["Suggested refinements:"]
+    for index, suggestion in enumerate(suggestions, start=1):
+        if suggestion.get("status") == "cap_reached":
+            lines.append(
+                f"{index}. {suggestion.get('agent_name')}: iteration cap reached; human review required."
+            )
+            continue
+        proposed = suggestion.get("proposed_parameters", {})
+        lines.append(
+            f"{index}. {suggestion.get('agent_name')} "
+            f"v{suggestion.get('current_version')} -> v{suggestion.get('proposed_version')}: "
+            f"{proposed} "
+            f"risk={suggestion.get('risk_level')}"
+        )
+    return "\n".join(lines)
+
+
+def _format_refinement_report(report: dict[str, Any]) -> str:
+    lines = [
+        "Refinement loop report",
+        "Refinements are not applied unless you tap Apply.",
+        f"Run id: {report.get('run_id')}",
+        f"Status: {report.get('status')}",
+        f"Mode: {report.get('mode')}",
+    ]
+    message = report.get("message")
+    if message and message != "Report-only. No changes have been applied.":
+        lines.append(str(message))
+    suggestions = report.get("suggestions", [])
+    if not suggestions:
+        lines.append("No checker-approved proposals to show.")
+        return "\n".join(lines)
+    lines.append("Suggestions:")
+    for index, suggestion in enumerate(suggestions, start=1):
+        checker = suggestion.get("checker", {})
+        evidence = suggestion.get("evidence", [])
+        lines.extend(
+            [
+                f"{index}. Target area: {suggestion.get('target_area')}",
+                f"Parameter: {suggestion.get('parameter_name')}",
+                f"Current: {suggestion.get('current_value')}",
+                f"Proposed: {suggestion.get('proposed_value')}",
+                f"Reason: {suggestion.get('reason')}",
+                f"Evidence/outcomes used: {len(evidence) if isinstance(evidence, list) else 0}",
+                f"Risk: {checker.get('risk_level')}",
+                f"Checker: {checker.get('status')}",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _format_refinement_reasoning(proposal: dict[str, Any]) -> str:
+    core_check = proposal.get("core_intent_check", proposal.get("checker", {}))
+    evidence = proposal.get("evidence", [])
+    return "\n".join(
+        [
+            "Refinement reasoning:",
+            f"Agent: {proposal.get('agent_name', proposal.get('target_area'))}",
+            f"Reason: {proposal.get('rationale', proposal.get('reason'))}",
+            f"Evidence count: {len(evidence) if isinstance(evidence, list) else 0}",
+            f"Checker passed: {core_check.get('passed')}",
+            f"Checker note: {core_check.get('reason', core_check.get('warning'))}",
+        ]
+    )
+
+
+def _format_refinement_status(status: dict[str, Any]) -> str:
+    recent_run = status.get("recent_run") or {}
+    return "\n".join(
+        [
+            "Refinement status",
+            f"Mode: {status.get('mode')}",
+            f"Paused: {status.get('loop_paused')}",
+            f"Max proposals/run: {status.get('max_proposals_per_run')}",
+            f"Max applies/run: {status.get('max_apply_per_run')}",
+            f"Recent run: {recent_run.get('status', 'none')}",
+            f"Pending proposals: {status.get('pending_proposals_count')}",
+            f"Applied refinements: {status.get('applied_refinements_count')}",
+            f"Rejected refinements: {status.get('rejected_refinements_count')}",
+            f"Failed validation: {status.get('failed_validation_count')}",
+        ]
+    )
+
+
+def _format_refinement_reporting_summary(report: dict[str, Any]) -> str:
+    pending = report.get("pending_proposals", [])
+    outcomes = report.get("recent_outcomes", [])
+    proposal_counts = report.get("proposal_counts", {})
+    event_counts = report.get("event_counts", {})
+    lines = [
+        "Refinement report",
+        str(report.get("message", "This is a report only. No changes were applied.")),
+        f"Recent outcomes: {len(outcomes)}",
+        f"Recent proposals: {len(report.get('recent_proposals', []))}",
+        f"Pending proposals: {proposal_counts.get('pending_approval', 0)}",
+        f"Applied: {event_counts.get('proposal_applied', 0)}",
+        f"Rejected: {event_counts.get('proposal_rejected', 0)}",
+        f"Rollbacks applied: {report.get('rollbacks_applied_count', 0)}",
+    ]
+    failed_reasons = report.get("common_failed_validation_reasons", [])
+    if failed_reasons:
+        lines.append("Failed validation reasons:")
+        for reason in failed_reasons[:3]:
+            lines.append(f"- {reason.get('reason')}: {reason.get('count')}")
+    else:
+        lines.append("Failed validation reasons: none")
+    if pending:
+        lines.append("Pending proposals:")
+        for proposal in pending[:5]:
+            lines.append(
+                "- "
+                f"{proposal.get('proposal_id')} "
+                f"{proposal.get('target_area')} "
+                f"{proposal.get('parameter_name')} -> {proposal.get('proposed_value')} "
+                f"risk={proposal.get('risk_level')} "
+                f"checker={proposal.get('checker_status')} "
+                f"created={proposal.get('created_at')}"
+            )
+    else:
+        lines.append("Pending proposals: none")
+    lines.append("Current parameters:")
+    parameters = report.get("current_parameters", {})
+    for agent_name, values in parameters.items():
+        lines.append(f"- {agent_name}: {values}")
+    lines.append(f"Recommended next action: {report.get('recommended_next_action')}")
+    return "\n".join(lines)
+
+
+def _format_refinement_history(history: list[dict[str, Any]]) -> str:
+    lines = ["Recent refinement history:"]
+    for event in history:
+        old_value = event.get("old_value")
+        new_value = event.get("new_value")
+        if old_value is None and new_value is None:
+            change_text = "no value change"
+        else:
+            change_text = f"{old_value} -> {new_value}"
+        lines.append(
+            "#"
+            f"{event.get('refinement_id')} "
+            f"{event.get('event_type')} "
+            f"{event.get('parameter_name') or 'unknown_parameter'}: "
+            f"{change_text} "
+            f"status={event.get('status')} "
+            f"at {event.get('created_at')}"
+        )
+        if event.get("rollback_from_refinement_id") is not None:
+            lines[-1] += f" rollback_from=#{event.get('rollback_from_refinement_id')}"
+    return "\n".join(lines)
 
 
 def _days_since(iso_value: str) -> int:

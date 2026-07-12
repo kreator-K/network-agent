@@ -1,7 +1,9 @@
 """Application orchestration layer for Network Growth Agent workflows."""
 
 import sqlite3
+import json
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
@@ -12,12 +14,40 @@ from agents.profile_context_agent import ProfileContextAgent
 from agents.prospect_discovery_agent import ProspectDiscoveryAgent
 from agents.refinement_loop_agent import RefinementLoopAgent
 from agents.relationship_tracker_agent import RelationshipTrackerAgent
+from agents.signal_intelligence_agent import SignalIntelligenceAgent
 from db.database import connect
-from db.models import ContentPost, Prospect
+from db.models import ContentPost, PersonalBrandProfile, PersonalBrandProfileData, Prospect
 
 
 DatabaseRef = str | Path
 TrackerFactory = Callable[[DatabaseRef], Any]
+BRAND_PROFILE_LIST_FIELDS = {
+    "institutions",
+    "career_focus",
+    "content_pillars",
+    "target_audiences",
+    "preferred_tone",
+    "preferred_post_formats",
+    "humor_preferences",
+    "personal_experience_boundaries",
+    "verified_experiences",
+    "allowed_personal_claims",
+    "claims_requiring_confirmation",
+    "topics_to_avoid",
+    "posting_preferences",
+    "networking_goals",
+    "desired_network_types",
+    "industries_of_interest",
+    "companies_of_interest",
+    "geographic_preferences",
+}
+BRAND_PROFILE_TEXT_FIELDS = {
+    "professional_identity",
+    "current_program",
+    "preferred_depth",
+    "notes",
+}
+SUPPORTED_BRAND_PROFILE_FIELDS = BRAND_PROFILE_LIST_FIELDS | BRAND_PROFILE_TEXT_FIELDS
 
 
 class NetworkOrchestratorError(RuntimeError):
@@ -40,6 +70,7 @@ class NetworkOrchestrator:
         calendar_agent: Any | None = None,
         content_inspiration_agent: Any | None = None,
         refinement_loop_agent: Any | None = None,
+        signal_intelligence_agent: Any | None = None,
         tracker_factory: TrackerFactory | None = None,
     ) -> None:
         """Create an orchestrator with injectable agents for tests."""
@@ -53,6 +84,7 @@ class NetworkOrchestrator:
             content_inspiration_agent or ContentInspirationAgent()
         )
         self.refinement_loop_agent = refinement_loop_agent or RefinementLoopAgent()
+        self.signal_intelligence_agent = signal_intelligence_agent or SignalIntelligenceAgent()
         self.tracker_factory = tracker_factory or RelationshipTrackerAgent
 
     def handle(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -110,13 +142,27 @@ class NetworkOrchestrator:
                 prospect=prospect,
                 ask_type=cast(AskType, ask_type),
             )
-            tracker.log_interaction(
+            interaction = tracker.log_interaction(
                 prospect_id=prospect_id,
                 interaction_type="outreach_draft",
-                content=str(draft.get("draft_text", "")),
+                content=json.dumps(
+                    {
+                        "status": "drafted",
+                        "ask_type": ask_type,
+                        "draft_text": str(draft.get("draft_text", "")),
+                        "source": "telegram",
+                    },
+                    sort_keys=True,
+                ),
                 direction="outbound_draft",
+                status="drafted",
+                source="telegram",
             )
-            return {"draft": draft, "context_warning": context_warning}
+            return {
+                "draft": draft,
+                "context_warning": context_warning,
+                "draft_interaction_id": interaction.id,
+            }
         except Exception as exc:
             _raise_with_context(
                 "draft_outreach",
@@ -139,31 +185,90 @@ class NetworkOrchestrator:
                 prospect=prospect,
                 history=history,
             )
-            tracker.log_interaction(
+            interaction = tracker.log_interaction(
                 prospect_id=prospect_id,
                 interaction_type="follow_up_draft",
-                content=str(draft.get("draft_text", "")),
+                content=json.dumps(
+                    {
+                        "status": "drafted",
+                        "draft_text": str(draft.get("draft_text", "")),
+                        "source": "telegram",
+                    },
+                    sort_keys=True,
+                ),
                 direction="outbound_draft",
+                status="drafted",
+                source="telegram",
             )
-            return {"draft": draft}
+            return {"draft": draft, "draft_interaction_id": interaction.id}
         except Exception as exc:
             _raise_with_context("draft_followup", {"prospect_id": prospect_id}, exc)
 
     def mark_outreach_sent(
         self,
         prospect_id: int,
+        ask_type: str | None = None,
+        draft_text: str | None = None,
+        source: str = "telegram_button",
+        draft_interaction_id: int | None = None,
         *,
         database: DatabaseRef,
     ) -> dict[str, Prospect | str]:
         """Mark manually sent outreach after explicit Telegram approval."""
         try:
             tracker = self._tracker(database)
+            if hasattr(tracker, "mark_outreach_manually_sent"):
+                prospect = tracker.mark_outreach_manually_sent(
+                    prospect_id=prospect_id,
+                    draft_interaction_id=draft_interaction_id,
+                    ask_type=ask_type,
+                    draft_text=draft_text,
+                    source=source,
+                )
+                return {"prospect": prospect, "status": "sent_manually"}
+            if draft_interaction_id is not None:
+                tracker.update_interaction_status(draft_interaction_id, "sent_manually")
+            interaction_content = json.dumps(
+                {
+                    "status": "sent_manually",
+                    "ask_type": ask_type,
+                    "draft_text": draft_text,
+                    "source": source,
+                },
+                sort_keys=True,
+            )
+            tracker.log_interaction(
+                prospect_id=prospect_id,
+                interaction_type="linkedin_connection_request",
+                content=interaction_content,
+                direction="outbound_draft",
+                status="sent_manually",
+                source=source,
+            )
             prospect = tracker.update_status(prospect_id, "connection_sent")
-            return {"prospect": prospect, "status": "connection_sent"}
+            return {"prospect": prospect, "status": "sent_manually"}
         except Exception as exc:
             _raise_with_context(
                 "mark_outreach_sent",
                 {"prospect_id": prospect_id},
+                exc,
+            )
+
+    def discard_outreach_draft(
+        self,
+        interaction_id: int,
+        *,
+        database: DatabaseRef,
+    ) -> dict[str, Any]:
+        """Mark an outreach/follow-up draft discarded without touching cadence."""
+        try:
+            tracker = self._tracker(database)
+            interaction = tracker.update_interaction_status(interaction_id, "discarded")
+            return {"interaction": interaction, "status": "discarded"}
+        except Exception as exc:
+            _raise_with_context(
+                "discard_outreach_draft",
+                {"interaction_id": interaction_id},
                 exc,
             )
 
@@ -243,6 +348,540 @@ class NetworkOrchestrator:
         except Exception as exc:
             _raise_with_context("get_pending_content_drafts", {}, exc)
 
+    def add_signal_source(
+        self,
+        name: str,
+        url: str,
+        source_type: str = "auto_feed",
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Store one public feed source as pending explicit approval."""
+        try:
+            source = self.signal_intelligence_agent.add_source(
+                name=name,
+                url=url,
+                source_type=source_type,
+                database=database,
+            )
+            return source.model_dump()
+        except Exception as exc:
+            _raise_with_context("add_signal_source", {"name": name}, exc)
+
+    def approve_signal_source(
+        self,
+        source_id: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Approve a source without starting any background scan."""
+        try:
+            return self.signal_intelligence_agent.set_source_approval(
+                source_id,
+                "approved",
+                database,
+            ).model_dump()
+        except Exception as exc:
+            _raise_with_context("approve_signal_source", {"source_id": source_id}, exc)
+
+    def reject_signal_source(
+        self,
+        source_id: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Reject a source and keep it disabled for auditability."""
+        try:
+            return self.signal_intelligence_agent.set_source_approval(
+                source_id,
+                "rejected",
+                database,
+            ).model_dump()
+        except Exception as exc:
+            _raise_with_context("reject_signal_source", {"source_id": source_id}, exc)
+
+    def set_signal_source_enabled(
+        self,
+        source_id: int,
+        enabled: bool,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Enable or disable an approved signal source."""
+        try:
+            return self.signal_intelligence_agent.set_source_enabled(
+                source_id,
+                enabled,
+                database,
+            ).model_dump()
+        except Exception as exc:
+            _raise_with_context(
+                "set_signal_source_enabled",
+                {"source_id": source_id, "enabled": enabled},
+                exc,
+            )
+
+    def list_signal_sources(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> list[dict[str, Any]]:
+        """Return public source configuration for Telegram display."""
+        try:
+            return [
+                source.model_dump()
+                for source in self.signal_intelligence_agent.list_sources(database)
+            ]
+        except Exception as exc:
+            _raise_with_context("list_signal_sources", {}, exc)
+
+    def get_signal_source(
+        self,
+        source_id: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Return one source record."""
+        try:
+            return self.signal_intelligence_agent.get_source(source_id, database).model_dump()
+        except Exception as exc:
+            _raise_with_context("get_signal_source", {"source_id": source_id}, exc)
+
+    def scan_signal_source(
+        self,
+        source_id: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Manually scan one approved enabled source."""
+        try:
+            return self.signal_intelligence_agent.ingest_source(source_id, database)
+        except Exception as exc:
+            _raise_with_context("scan_signal_source", {"source_id": source_id}, exc)
+
+    def scan_enabled_signal_sources(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Manually scan all approved enabled sources without scheduling."""
+        try:
+            return self.signal_intelligence_agent.ingest_enabled_sources(database)
+        except Exception as exc:
+            _raise_with_context("scan_enabled_signal_sources", {}, exc)
+
+    def get_recent_signals(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return recent deterministic signals without Phase 8C ranking."""
+        try:
+            return self.signal_intelligence_agent.get_recent_signals(database, limit)
+        except Exception as exc:
+            _raise_with_context("get_recent_signals", {}, exc)
+
+    def score_signal(
+        self, signal_id: int, *, database: sqlite3.Connection | DatabaseRef
+    ) -> dict[str, Any]:
+        """Coordinate scoring of one stored signal; it never fetches a source."""
+        try:
+            result = self.signal_intelligence_agent.score_signal(signal_id, database)
+            if result.get("eligible"):
+                opportunity = self.signal_intelligence_agent.generate_content_opportunity(
+                    signal_id, database
+                )
+                result["opportunity"] = (
+                    None if opportunity is None else opportunity.model_dump()
+                )
+            return result
+        except Exception as exc:
+            _raise_with_context("score_signal", {"signal_id": signal_id}, exc)
+
+    def score_recent_signals(
+        self, *, database: sqlite3.Connection | DatabaseRef, limit: int = 10
+    ) -> dict[str, Any]:
+        """Coordinate a bounded stored-signal scoring run."""
+        try:
+            result = self.signal_intelligence_agent.score_recent_signals(database, limit)
+            opportunities = self.signal_intelligence_agent.generate_top_content_opportunities(
+                database, limit
+            )
+            result["opportunities_created"] = len(opportunities)
+            return result
+        except Exception as exc:
+            _raise_with_context("score_recent_signals", {"limit": limit}, exc)
+
+    def generate_content_opportunity(
+        self, signal_id: int, *, database: sqlite3.Connection | DatabaseRef
+    ) -> dict[str, Any] | None:
+        """Create a pre-draft opportunity only from a qualifying stored score."""
+        try:
+            result = self.signal_intelligence_agent.generate_content_opportunity(signal_id, database)
+            return None if result is None else result.model_dump()
+        except Exception as exc:
+            _raise_with_context("generate_content_opportunity", {"signal_id": signal_id}, exc)
+
+    def generate_top_content_opportunities(
+        self, *, database: sqlite3.Connection | DatabaseRef, limit: int = 5
+    ) -> list[dict[str, Any]]:
+        """Create a bounded candidate batch without drafting any content post."""
+        try:
+            return [item.model_dump() for item in self.signal_intelligence_agent.generate_top_content_opportunities(database, limit)]
+        except Exception as exc:
+            _raise_with_context("generate_top_content_opportunities", {"limit": limit}, exc)
+
+    def get_ranked_signals(
+        self, *, database: sqlite3.Connection | DatabaseRef, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """Return scored signals ordered for review."""
+        try:
+            return self.signal_intelligence_agent.list_ranked_signals(database, limit)
+        except Exception as exc:
+            _raise_with_context("get_ranked_signals", {"limit": limit}, exc)
+
+    def list_content_opportunities(
+        self, *, database: sqlite3.Connection | DatabaseRef, status: str | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """Return content opportunities; they remain pre-draft records in Phase 8C."""
+        try:
+            return [item.model_dump() for item in self.signal_intelligence_agent.list_content_opportunities(database, status, limit)]
+        except Exception as exc:
+            _raise_with_context("list_content_opportunities", {"status": status}, exc)
+
+    def get_content_opportunity(
+        self, opportunity_id: int, *, database: sqlite3.Connection | DatabaseRef
+    ) -> dict[str, Any]:
+        """Return one reviewable opportunity."""
+        try:
+            return self.signal_intelligence_agent.get_content_opportunity(opportunity_id, database).model_dump()
+        except Exception as exc:
+            _raise_with_context("get_content_opportunity", {"opportunity_id": opportunity_id}, exc)
+
+    def save_content_opportunity(self, opportunity_id: int, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        """Record an explicit human save decision."""
+        return self._transition_content_opportunity(opportunity_id, "saved", database=database)
+
+    def dismiss_content_opportunity(self, opportunity_id: int, reason: str | None = None, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        """Record an explicit human dismissal decision."""
+        return self._transition_content_opportunity(opportunity_id, "dismissed", reason, database=database)
+
+    def select_content_opportunity(self, opportunity_id: int, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        """Mark a future-drafting candidate without generating a post."""
+        return self._transition_content_opportunity(opportunity_id, "selected", database=database)
+
+    def record_signal_preference(self, signal_id: int, feedback_type: str, *, database: sqlite3.Connection | DatabaseRef, note: str | None = None) -> None:
+        """Store user feedback only; no profile or weight mutation follows."""
+        self._record_content_preference("signal", signal_id, feedback_type, database, note)
+
+    def record_opportunity_preference(self, opportunity_id: int, feedback_type: str, *, database: sqlite3.Connection | DatabaseRef, note: str | None = None) -> None:
+        """Store opportunity feedback only; no content drafting follows."""
+        self._record_content_preference("opportunity", opportunity_id, feedback_type, database, note)
+
+    def _transition_content_opportunity(self, opportunity_id: int, status: str, reason: str | None = None, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        try:
+            return self.signal_intelligence_agent.transition_content_opportunity(opportunity_id, status, database, reason).model_dump()
+        except Exception as exc:
+            _raise_with_context("transition_content_opportunity", {"opportunity_id": opportunity_id, "status": status}, exc)
+
+    def _record_content_preference(self, target_type: str, target_id: int, feedback_type: str, database: sqlite3.Connection | DatabaseRef, note: str | None) -> None:
+        try:
+            self.signal_intelligence_agent.record_preference(target_type, target_id, feedback_type, database, note)
+        except Exception as exc:
+            _raise_with_context("record_content_preference", {"target_type": target_type, "target_id": target_id}, exc)
+
+    def get_signal(
+        self,
+        signal_id: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Return one attributed stored signal."""
+        try:
+            return self.signal_intelligence_agent.get_signal_by_id(signal_id, database)
+        except Exception as exc:
+            _raise_with_context("get_signal", {"signal_id": signal_id}, exc)
+
+    def save_personal_brand_profile(
+        self,
+        profile: PersonalBrandProfileData | dict[str, Any],
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+        activate: bool = True,
+    ) -> PersonalBrandProfile:
+        """Append and optionally activate a validated personal-brand version."""
+        try:
+            return self.profile_context_agent.save_profile(
+                profile=profile,
+                database=database,
+                activate=activate,
+            )
+        except Exception as exc:
+            _raise_with_context("save_personal_brand_profile", {}, exc)
+
+    def get_active_personal_brand_profile(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> PersonalBrandProfile | None:
+        """Return the current active personal-brand profile version."""
+        try:
+            return self.profile_context_agent.get_active_profile(database)
+        except Exception as exc:
+            _raise_with_context("get_active_personal_brand_profile", {}, exc)
+
+    def activate_personal_brand_profile(
+        self,
+        version: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> PersonalBrandProfile:
+        """Activate an existing immutable personal-brand profile version."""
+        try:
+            return self.profile_context_agent.activate_profile(version, database)
+        except Exception as exc:
+            _raise_with_context(
+                "activate_personal_brand_profile",
+                {"version": version},
+                exc,
+            )
+
+    def get_personal_brand_context(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> str:
+        """Return deterministic prompt context for the active profile."""
+        try:
+            profile = self.profile_context_agent.get_active_profile(database)
+            return (
+                ""
+                if profile is None
+                else self.profile_context_agent.build_personal_brand_context(profile)
+            )
+        except Exception as exc:
+            _raise_with_context("get_personal_brand_context", {}, exc)
+
+    def get_active_brand_profile(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any] | None:
+        """Return validated active profile data with version metadata."""
+        try:
+            profile = self.profile_context_agent.get_active_profile(database)
+            if profile is None:
+                return None
+            return {
+                "profile": profile,
+                "data": self.profile_context_agent.validate_personal_brand_profile(
+                    json.loads(profile.profile_json)
+                ),
+                "summary": self.profile_context_agent.summarize_personal_brand_profile(
+                    profile
+                ),
+            }
+        except Exception as exc:
+            _raise_with_context("get_active_brand_profile", {}, exc)
+
+    def get_brand_profile_summary(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any] | None:
+        """Return concise active-profile fields for Telegram display."""
+        try:
+            profile = self.profile_context_agent.get_active_profile(database)
+            return (
+                None
+                if profile is None
+                else self.profile_context_agent.summarize_personal_brand_profile(profile)
+            )
+        except Exception as exc:
+            _raise_with_context("get_brand_profile_summary", {}, exc)
+
+    def list_brand_profile_versions(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Return recent immutable profile-version summaries."""
+        try:
+            versions = self.profile_context_agent.list_profile_versions(database, limit)
+            return [
+                self.profile_context_agent.summarize_personal_brand_profile(profile)
+                for profile in versions
+            ]
+        except Exception as exc:
+            _raise_with_context("list_brand_profile_versions", {}, exc)
+
+    def create_brand_profile_version(
+        self,
+        profile: PersonalBrandProfileData | dict[str, Any],
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+        activate: bool = True,
+    ) -> dict[str, Any]:
+        """Create a validated immutable profile version."""
+        try:
+            created = self.profile_context_agent.save_profile(
+                profile,
+                database,
+                activate=activate,
+            )
+            return self.profile_context_agent.summarize_personal_brand_profile(created)
+        except Exception as exc:
+            _raise_with_context("create_brand_profile_version", {}, exc)
+
+    def update_brand_profile_field(
+        self,
+        field_name: str,
+        value: str,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Create and activate a new version from one safe field edit."""
+        try:
+            if field_name not in SUPPORTED_BRAND_PROFILE_FIELDS:
+                allowed = ", ".join(sorted(SUPPORTED_BRAND_PROFILE_FIELDS))
+                raise ValueError(f"Unsupported personal-brand field '{field_name}'. Allowed: {allowed}.")
+            active = self.profile_context_agent.get_active_profile(database)
+            if active is None:
+                raise ValueError("No active personal-brand profile exists.")
+            data = self.profile_context_agent.validate_personal_brand_profile(
+                json.loads(active.profile_json)
+            ).model_dump(mode="json")
+            if field_name in BRAND_PROFILE_LIST_FIELDS:
+                data[field_name] = [item.strip() for item in value.split(",") if item.strip()]
+            else:
+                data[field_name] = value.strip() or None
+            validated = self.profile_context_agent.validate_personal_brand_profile(data)
+            created = self.profile_context_agent.save_profile(
+                validated,
+                database,
+                activate=True,
+            )
+            return self.profile_context_agent.summarize_personal_brand_profile(created)
+        except Exception as exc:
+            _raise_with_context(
+                "update_brand_profile_field",
+                {"field_name": field_name},
+                exc,
+            )
+
+    def activate_brand_profile(
+        self,
+        version: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Activate a validated historical profile version by version number."""
+        try:
+            profile = self.profile_context_agent.get_profile(version, database)
+            self.profile_context_agent.validate_personal_brand_profile(
+                json.loads(profile.profile_json)
+            )
+            active = self.profile_context_agent.activate_profile(version, database)
+            return self.profile_context_agent.summarize_personal_brand_profile(active)
+        except Exception as exc:
+            _raise_with_context("activate_brand_profile", {"version": version}, exc)
+
+    def get_pending_drafts(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Return pending outreach and content drafts for Telegram display."""
+        try:
+            connection, should_close = _coerce_connection(database)
+            try:
+                outreach_rows = connection.execute(
+                    """
+                    SELECT
+                        interactions.id,
+                        interactions.prospect_id,
+                        interactions.interaction_type,
+                        interactions.content,
+                        interactions.status,
+                        interactions.source,
+                        interactions.created_at,
+                        prospects.name AS prospect_name
+                    FROM interactions
+                    JOIN prospects ON prospects.id = interactions.prospect_id
+                    WHERE interactions.interaction_type IN (
+                        'outreach_draft',
+                        'follow_up_draft'
+                    )
+                        AND interactions.status = 'drafted'
+                    ORDER BY interactions.created_at ASC, interactions.id ASC
+                    """
+                ).fetchall()
+                content_rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM content_posts
+                    WHERE status IN (
+                        'draft',
+                        'saved',
+                        'approved_for_later_posting'
+                    )
+                    ORDER BY created_at ASC, id ASC
+                    """
+                ).fetchall()
+            finally:
+                if should_close:
+                    connection.close()
+            return {
+                "outreach": [_format_pending_outreach(row) for row in outreach_rows],
+                "content": [_format_pending_content(row) for row in content_rows],
+            }
+        except Exception as exc:
+            _raise_with_context("get_pending_drafts", {}, exc)
+
+    def save_content_draft(
+        self,
+        post_id: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Mark an internally generated content draft as saved."""
+        return self._update_content_post_status(
+            post_id,
+            "saved",
+            database=database,
+            method_name="save_content_draft",
+        )
+
+    def approve_content_draft_for_later_posting(
+        self,
+        post_id: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Mark a content draft approved internally without publishing."""
+        return self._update_content_post_status(
+            post_id,
+            "approved_for_later_posting",
+            database=database,
+            method_name="approve_content_draft_for_later_posting",
+        )
+
+    def discard_content_draft(
+        self,
+        post_id: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Discard an internal content draft without external action."""
+        return self._update_content_post_status(
+            post_id,
+            "discarded",
+            database=database,
+            method_name="discard_content_draft",
+        )
+
     def record_outreach_outcome(
         self,
         prospect_id: int,
@@ -294,8 +933,237 @@ class NetworkOrchestrator:
                 exc,
             )
 
+    def record_outcome(
+        self,
+        target_type: str,
+        target_id: int,
+        outcome: str,
+        notes: str | None = None,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Record an explicit user-reported refinement outcome."""
+        try:
+            return self.refinement_loop_agent.record_explicit_outcome(
+                target_type=target_type,
+                target_id=target_id,
+                outcome=outcome,
+                notes=notes,
+                database=database,
+                source="telegram_command",
+            )
+        except Exception as exc:
+            _raise_with_context(
+                "record_outcome",
+                {
+                    "target_type": target_type,
+                    "target_id": target_id,
+                    "outcome": outcome,
+                },
+                exc,
+            )
+
+    def suggest_refinements(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Run the Phase 6A report-only refinement loop."""
+        try:
+            return self.refinement_loop_agent.run_report_only_refinement_loop(
+                database=database,
+            )
+        except Exception as exc:
+            _raise_with_context("suggest_refinements", {}, exc)
+
+    def apply_refinement(
+        self,
+        proposal: dict[str, Any],
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Apply a human-approved refinement after core-intent validation."""
+        try:
+            return self.refinement_loop_agent.accept_refinement(
+                {**proposal, "source": "telegram_callback"},
+                database=database,
+            )
+        except Exception as exc:
+            _raise_with_context(
+                "apply_refinement",
+                {"agent_name": proposal.get("agent_name")},
+                exc,
+            )
+
+    def apply_refinement_proposal(
+        self,
+        proposal_id: str,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Apply a persisted human-approved refinement proposal."""
+        try:
+            return self.refinement_loop_agent.apply_persisted_proposal(
+                proposal_id=proposal_id,
+                database=database,
+            )
+        except Exception as exc:
+            _raise_with_context(
+                "apply_refinement_proposal",
+                {"proposal_id": proposal_id},
+                exc,
+            )
+
+    def reject_refinement(
+        self,
+        proposal: dict[str, Any],
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Record a human rejection without changing parameters."""
+        try:
+            _ = database
+            return {
+                "status": "rejected",
+                "agent_name": proposal.get("agent_name"),
+            }
+        except Exception as exc:
+            _raise_with_context(
+                "reject_refinement",
+                {"agent_name": proposal.get("agent_name")},
+                exc,
+            )
+
+    def reject_refinement_proposal(
+        self,
+        proposal_id: str,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Reject a persisted refinement proposal without changing parameters."""
+        try:
+            return self.refinement_loop_agent.reject_persisted_proposal(
+                proposal_id=proposal_id,
+                database=database,
+            )
+        except Exception as exc:
+            _raise_with_context(
+                "reject_refinement_proposal",
+                {"proposal_id": proposal_id},
+                exc,
+            )
+
+    def get_refinement_reasoning(
+        self,
+        proposal_id: str,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Return user-facing reasoning for a persisted proposal."""
+        try:
+            return self.refinement_loop_agent.get_persisted_proposal_reasoning(
+                proposal_id=proposal_id,
+                database=database,
+            )
+        except Exception as exc:
+            _raise_with_context(
+                "get_refinement_reasoning",
+                {"proposal_id": proposal_id},
+                exc,
+            )
+
+    def rollback_refinement(
+        self,
+        refinement_id: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Rollback one applied refinement event by refinement_history id."""
+        try:
+            return self.refinement_loop_agent.rollback_applied_refinement(
+                refinement_id=refinement_id,
+                database=database,
+            )
+        except Exception as exc:
+            _raise_with_context(
+                "rollback_refinement",
+                {"refinement_id": refinement_id},
+                exc,
+            )
+
+    def get_refinement_history(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Return recent refinement history events for Telegram display."""
+        try:
+            return self.refinement_loop_agent.recent_refinement_history(
+                database=database,
+                limit=limit,
+            )
+        except Exception as exc:
+            _raise_with_context("get_refinement_history", {"limit": limit}, exc)
+
+    def get_refinement_status(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Return read-only refinement loop status for Telegram."""
+        try:
+            return self.refinement_loop_agent.get_refinement_status(database=database)
+        except Exception as exc:
+            _raise_with_context("get_refinement_status", {}, exc)
+
+    def get_refinement_report(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Return a read-only refinement report for Telegram."""
+        try:
+            return self.refinement_loop_agent.get_refinement_report(database=database)
+        except Exception as exc:
+            _raise_with_context("get_refinement_report", {}, exc)
+
     def _tracker(self, database: DatabaseRef) -> Any:
         return self.tracker_factory(database)
+
+    def _update_content_post_status(
+        self,
+        post_id: int,
+        status: str,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+        method_name: str,
+    ) -> dict[str, Any]:
+        try:
+            connection, should_close = _coerce_connection(database)
+            try:
+                row = connection.execute(
+                    "SELECT id FROM content_posts WHERE id = ?",
+                    (post_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"Content draft id {post_id} does not exist.")
+                now = datetime.now(UTC).isoformat()
+                connection.execute(
+                    """
+                    UPDATE content_posts
+                    SET status = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (status, now, post_id),
+                )
+                connection.commit()
+            finally:
+                if should_close:
+                    connection.close()
+            return {"post_id": post_id, "status": status}
+        except Exception as exc:
+            _raise_with_context(method_name, {"post_id": post_id}, exc)
 
 
 def _format_due_followup(prospect: Prospect) -> dict[str, Any]:
@@ -307,6 +1175,42 @@ def _format_due_followup(prospect: Prospect) -> dict[str, Any]:
         "last_touch_date": prospect.last_touch_date,
         "status": prospect.status,
     }
+
+
+def _format_pending_outreach(row: sqlite3.Row) -> dict[str, Any]:
+    content = _json_object(row["content"])
+    return {
+        "type": "outreach",
+        "id": row["id"],
+        "prospect_id": row["prospect_id"],
+        "prospect_name": row["prospect_name"],
+        "interaction_type": row["interaction_type"],
+        "ask_type": content.get("ask_type"),
+        "status": row["status"],
+        "source": row["source"],
+        "created_at": row["created_at"],
+    }
+
+
+def _format_pending_content(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "type": "content",
+        "id": row["id"],
+        "topic": row["topic"],
+        "image_source": row["image_source"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+    }
+
+
+def _json_object(raw_value: Any) -> dict[str, Any]:
+    if not isinstance(raw_value, str) or not raw_value:
+        return {}
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _current_active_version(

@@ -13,6 +13,8 @@ TaskType = Literal[
     "followup_draft",
     "content_post_draft",
     "refinement_analysis",
+    "signal_semantic_scoring",
+    "content_opportunity_generation",
 ]
 SUPPORTED_TASK_TYPES = set(get_args(TaskType))
 

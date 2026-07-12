@@ -252,6 +252,58 @@ def test_mark_meeting_confirmed_logs_interaction(
     ]
 
 
+def test_mark_outreach_manually_sent_is_atomic_and_idempotent(
+    database_path: Path,
+    tracker: RelationshipTrackerAgent,
+) -> None:
+    prospect = tracker.add_prospect("Ada Lovelace")
+    draft = tracker.log_interaction(
+        _id(prospect.id),
+        "outreach_draft",
+        '{"draft_text":"Hello","ask_type":"general_chat"}',
+        status="drafted",
+        source="telegram",
+    )
+
+    for _ in range(2):
+        tracker.mark_outreach_manually_sent(
+            _id(prospect.id),
+            draft_interaction_id=_id(draft.id),
+            ask_type="general_chat",
+            draft_text="Hello",
+        )
+
+    history = tracker.get_prospect_history(_id(prospect.id))
+    manual = [
+        item
+        for item in history
+        if item.interaction_type == "linkedin_connection_request"
+    ]
+    assert len(manual) == 1
+    assert manual[0].status == "sent_manually"
+    assert tracker.get_prospect(_id(prospect.id)).status == "connection_sent"
+
+
+def test_mark_outreach_manually_sent_rejects_cross_prospect_draft(
+    tracker: RelationshipTrackerAgent,
+) -> None:
+    first = tracker.add_prospect("Ada Lovelace")
+    second = tracker.add_prospect("Grace Hopper")
+    draft = tracker.log_interaction(
+        _id(first.id),
+        "outreach_draft",
+        "Hello",
+        status="drafted",
+    )
+
+    with pytest.raises(Exception, match="does not belong"):
+        tracker.mark_outreach_manually_sent(
+            _id(second.id),
+            draft_interaction_id=_id(draft.id),
+            draft_text="Hello",
+        )
+
+
 def _id(value: int | None) -> int:
     assert value is not None
     return value

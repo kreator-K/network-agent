@@ -1,7 +1,7 @@
 """Tests for explicit calendar confirmation behavior."""
 
 from datetime import date, timedelta
-from typing import cast
+from typing import Any, cast
 
 import pytest
 import pytest_mock
@@ -21,6 +21,7 @@ class FakeTracker:
     def __init__(self) -> None:
         self.mark_calls: list[dict[str, object]] = []
         self.upcoming: list[dict[str, str | None]] = []
+        self.sync_calls: list[tuple[int, str | None, str]] = []
 
     def mark_meeting_confirmed(
         self,
@@ -58,6 +59,23 @@ class FakeTracker:
             for meeting in self.upcoming
             if str(meeting["scheduled_date"]) >= today
         ]
+
+    def update_calendar_block_sync(
+        self,
+        calendar_block_id: int,
+        event_id: str | None,
+        status: str,
+    ) -> CalendarBlock:
+        self.sync_calls.append((calendar_block_id, event_id, status))
+        return CalendarBlock(
+            id=calendar_block_id,
+            prospect_id=7,
+            scheduled_date="2026-01-20",
+            start_time="09:30",
+            external_event_id=event_id,
+            status=cast("Any", status),
+            created_at="2026-01-01",
+        )
 
 
 def test_confirm_meeting_validates_date_format(
@@ -174,6 +192,26 @@ def test_confirm_meeting_handles_calendar_sync_not_implemented_gracefully(
 
     assert result["calendar_synced"] is False
     assert "Phase 4" in str(result["sync_note"])
+
+
+def test_confirm_meeting_persists_provider_event_id_and_status(
+    mocker: pytest_mock.MockerFixture,
+) -> None:
+    tracker = FakeTracker()
+    mocker.patch.object(
+        calendar_module.google_calendar_client,
+        "block_time",
+        return_value="event-12",
+    )
+
+    CalendarAgent().confirm_meeting(
+        prospect_id=7,
+        meeting_date="2026-01-20",
+        start_time="09:30",
+        tracker=tracker,
+    )
+
+    assert tracker.sync_calls == [(1, "event-12", "calendar_created")]
 
 
 def test_confirm_meeting_never_triggers_without_explicit_call() -> None:

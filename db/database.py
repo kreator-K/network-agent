@@ -1,15 +1,24 @@
 """SQLite database helpers for the network-agent data layer."""
 
 import json
+import hashlib
 import sqlite3
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from db.models import PersonalBrandProfileData
+
 
 DEFAULT_SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 DEFAULT_CORE_INTENT_PATH = Path(__file__).resolve().parent.parent / "config" / "core_intent.json"
+DEFAULT_PERSONAL_BRAND_PROFILE_PATH = (
+    Path(__file__).resolve().parent.parent / "config" / "personal_brand_profile.json"
+)
+DEFAULT_SIGNAL_SCORING_CONFIG_PATH = (
+    Path(__file__).resolve().parent.parent / "config" / "signal_scoring_config.json"
+)
 
 
 def connect(database_path: str | Path) -> sqlite3.Connection:
@@ -24,12 +33,105 @@ def initialize_database(
     database_path: str | Path,
     schema_path: str | Path = DEFAULT_SCHEMA_PATH,
     core_intent_path: str | Path = DEFAULT_CORE_INTENT_PATH,
+    personal_brand_profile_path: str | Path = DEFAULT_PERSONAL_BRAND_PROFILE_PATH,
+    signal_scoring_config_path: str | Path = DEFAULT_SIGNAL_SCORING_CONFIG_PATH,
 ) -> None:
-    """Initialize tables and seed `core_intent` from human-edited JSON."""
+    """Initialize tables and seed durable human-controlled configuration."""
     schema = Path(schema_path).read_text(encoding="utf-8")
     with connect(database_path) as connection:
         connection.executescript(schema)
+        _migrate_interactions_connection_request_type(connection)
+        _migrate_interactions_lifecycle_columns(connection)
+        _migrate_content_posts_uploaded_image_source(connection)
+        _migrate_content_posts_lifecycle_columns(connection)
+        _migrate_refinement_outcomes_explicit_columns(connection)
+        _migrate_calendar_block_lifecycle_columns(connection)
+        _migrate_signal_scoring_columns(connection)
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_signals_score ON signals(total_score DESC)"
+        )
+        seed_refinement_loop_constraints(connection)
         seed_core_intent(connection, core_intent_path)
+        seed_personal_brand_profile(connection, personal_brand_profile_path)
+        seed_signal_scoring_config(connection, signal_scoring_config_path)
+
+
+def canonical_signal_scoring_config_json(config: dict[str, Any]) -> str:
+    """Serialize a validated scoring configuration deterministically."""
+    _validate_signal_scoring_config(config)
+    return json.dumps(config, sort_keys=True, separators=(",", ":"))
+
+
+def signal_scoring_config_hash(config_json: str) -> str:
+    """Return a stable hash for an immutable scoring configuration."""
+    return hashlib.sha256(config_json.encode("utf-8")).hexdigest()
+
+
+def seed_signal_scoring_config(
+    connection: sqlite3.Connection,
+    config_path: str | Path = DEFAULT_SIGNAL_SCORING_CONFIG_PATH,
+) -> bool:
+    """Seed conservative immutable scoring version one only on an empty table."""
+    exists = connection.execute("SELECT 1 FROM signal_scoring_config LIMIT 1").fetchone()
+    if exists is not None:
+        return False
+    raw_config = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    config_json = canonical_signal_scoring_config_json(raw_config)
+    now = _utc_now()
+    connection.execute(
+        """
+        INSERT INTO signal_scoring_config (
+            version, config_json, config_hash, is_active, created_at, activated_at
+        ) VALUES (1, ?, ?, 1, ?, ?)
+        """,
+        (config_json, signal_scoring_config_hash(config_json), now, now),
+    )
+    return True
+
+
+def get_active_signal_scoring_config_row(connection: sqlite3.Connection) -> sqlite3.Row:
+    """Return the one active scoring configuration or raise a useful error."""
+    row = connection.execute(
+        "SELECT * FROM signal_scoring_config WHERE is_active = 1"
+    ).fetchone()
+    if row is None:
+        raise ValueError("No active signal scoring configuration exists.")
+    return row
+
+
+def _validate_signal_scoring_config(config: dict[str, Any]) -> None:
+    required = {
+        "formula_version", "weights", "minimum_final_score", "minimum_credibility_score",
+        "maximum_factual_risk", "maximum_generic_commentary_risk",
+        "freshness_half_life_days", "maximum_age_days", "topic_saturation_limit",
+        "maximum_signals_per_run", "maximum_model_assisted_signals_per_run",
+        "maximum_opportunities_per_run", "model_assisted_scoring_enabled",
+        "maximum_retry_attempts",
+    }
+    missing = required.difference(config)
+    if missing:
+        raise ValueError(f"Signal scoring configuration is missing: {', '.join(sorted(missing))}.")
+    weights = config["weights"]
+    if not isinstance(weights, dict) or not weights:
+        raise ValueError("Signal scoring configuration weights must be a non-empty object.")
+    if any(not isinstance(value, (int, float)) or value < 0 or value > 1 for value in weights.values()):
+        raise ValueError("Signal scoring weights must be between 0 and 1.")
+    if sum(weights.values()) > 1.00001:
+        raise ValueError("Signal scoring weights cannot total more than 1.")
+    for key in (
+        "minimum_final_score", "minimum_credibility_score", "maximum_factual_risk",
+        "maximum_generic_commentary_risk",
+    ):
+        value = config[key]
+        if not isinstance(value, (int, float)) or value < 0 or value > 100:
+            raise ValueError(f"Signal scoring configuration {key} must be between 0 and 100.")
+    for key in (
+        "freshness_half_life_days", "maximum_age_days", "topic_saturation_limit",
+        "maximum_signals_per_run", "maximum_model_assisted_signals_per_run",
+        "maximum_opportunities_per_run", "maximum_retry_attempts",
+    ):
+        if not isinstance(config[key], int) or config[key] < 0:
+            raise ValueError(f"Signal scoring configuration {key} must be a non-negative integer.")
 
 
 def seed_core_intent(
@@ -58,6 +160,629 @@ def seed_core_intent(
             for rule in rules
         ),
     )
+
+
+def seed_personal_brand_profile(
+    connection: sqlite3.Connection,
+    profile_path: str | Path = DEFAULT_PERSONAL_BRAND_PROFILE_PATH,
+) -> bool:
+    """Create version one from seed JSON only when no profile exists.
+
+    The seed is an initialization input, not live agent configuration. Existing
+    SQLite profile versions are never overwritten by later seed-file edits.
+    """
+    if personal_brand_profile_exists(connection):
+        return False
+    path = Path(profile_path)
+    if not path.exists():
+        return False
+    try:
+        raw_data = json.loads(path.read_text(encoding="utf-8"))
+        profile = PersonalBrandProfileData.model_validate(raw_data)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Personal-brand profile seed is invalid: {path}") from exc
+    create_personal_brand_profile_version(connection, profile, activate=True)
+    return True
+
+
+def canonical_personal_brand_profile_json(profile: PersonalBrandProfileData) -> str:
+    """Serialize typed profile content deterministically before hashing."""
+    return json.dumps(
+        profile.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def personal_brand_profile_hash(profile_json: str) -> str:
+    """Return the stable hash for canonical personal-brand profile JSON."""
+    return hashlib.sha256(profile_json.encode("utf-8")).hexdigest()
+
+
+def personal_brand_profile_exists(connection: sqlite3.Connection) -> bool:
+    """Return whether any stored profile version exists."""
+    row = connection.execute(
+        "SELECT 1 FROM personal_brand_profile LIMIT 1"
+    ).fetchone()
+    return row is not None
+
+
+def next_personal_brand_profile_version(connection: sqlite3.Connection) -> int:
+    """Return the next immutable personal-brand profile version number."""
+    row = connection.execute(
+        "SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM personal_brand_profile"
+    ).fetchone()
+    return int(row["next_version"])
+
+
+def create_personal_brand_profile_version(
+    connection: sqlite3.Connection,
+    profile: PersonalBrandProfileData,
+    activate: bool = True,
+) -> sqlite3.Row:
+    """Append a typed profile version and optionally activate it atomically."""
+    profile_json = canonical_personal_brand_profile_json(profile)
+    profile_hash = personal_brand_profile_hash(profile_json)
+    now = _utc_now()
+    connection.execute("SAVEPOINT personal_brand_version")
+    try:
+        version = next_personal_brand_profile_version(connection)
+        if activate:
+            connection.execute(
+                "UPDATE personal_brand_profile SET is_active = 0 WHERE is_active = 1"
+            )
+        cursor = connection.execute(
+            """
+            INSERT INTO personal_brand_profile (
+                version, schema_version, profile_json, profile_hash,
+                is_active, created_at, activated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                version,
+                profile.schema_version,
+                profile_json,
+                profile_hash,
+                int(activate),
+                now,
+                now if activate else None,
+            ),
+        )
+        row = connection.execute(
+            "SELECT * FROM personal_brand_profile WHERE id = ?",
+            (cursor.lastrowid,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("SQLite did not return the created personal-brand profile.")
+        connection.execute("RELEASE SAVEPOINT personal_brand_version")
+        return row
+    except Exception:
+        connection.execute("ROLLBACK TO SAVEPOINT personal_brand_version")
+        connection.execute("RELEASE SAVEPOINT personal_brand_version")
+        raise
+
+
+def get_active_personal_brand_profile_row(
+    connection: sqlite3.Connection,
+) -> sqlite3.Row | None:
+    """Return the active profile row, if profile setup has occurred."""
+    return connection.execute(
+        "SELECT * FROM personal_brand_profile WHERE is_active = 1 LIMIT 1"
+    ).fetchone()
+
+
+def get_personal_brand_profile_by_id(
+    connection: sqlite3.Connection,
+    profile_id: int,
+) -> sqlite3.Row | None:
+    """Return a profile row by stable database identifier."""
+    return connection.execute(
+        "SELECT * FROM personal_brand_profile WHERE id = ?",
+        (profile_id,),
+    ).fetchone()
+
+
+def get_personal_brand_profile_by_version(
+    connection: sqlite3.Connection,
+    version: int,
+) -> sqlite3.Row | None:
+    """Return a profile row by immutable version number."""
+    return connection.execute(
+        "SELECT * FROM personal_brand_profile WHERE version = ?",
+        (version,),
+    ).fetchone()
+
+
+def list_personal_brand_profile_rows(
+    connection: sqlite3.Connection,
+    limit: int = 10,
+) -> list[sqlite3.Row]:
+    """Return newest profile versions first for concise operator review."""
+    return list(
+        connection.execute(
+            "SELECT * FROM personal_brand_profile ORDER BY version DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    )
+
+
+def activate_personal_brand_profile_version(
+    connection: sqlite3.Connection,
+    version: int,
+) -> sqlite3.Row | None:
+    """Activate an existing profile version without changing its JSON content."""
+    row = get_personal_brand_profile_by_version(connection, version)
+    if row is None:
+        return None
+    now = _utc_now()
+    connection.execute("SAVEPOINT personal_brand_activation")
+    try:
+        connection.execute(
+            "UPDATE personal_brand_profile SET is_active = 0 WHERE is_active = 1"
+        )
+        connection.execute(
+            """
+            UPDATE personal_brand_profile
+            SET is_active = 1, activated_at = ?
+            WHERE version = ?
+            """,
+            (now, version),
+        )
+        active = get_personal_brand_profile_by_version(connection, version)
+        connection.execute("RELEASE SAVEPOINT personal_brand_activation")
+        return active
+    except Exception:
+        connection.execute("ROLLBACK TO SAVEPOINT personal_brand_activation")
+        connection.execute("RELEASE SAVEPOINT personal_brand_activation")
+        raise
+
+
+def verify_personal_brand_profile_hash(row: sqlite3.Row) -> bool:
+    """Validate stored profile JSON and compare its canonical content hash."""
+    try:
+        profile = PersonalBrandProfileData.model_validate(json.loads(row["profile_json"]))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    if profile.schema_version != row["schema_version"]:
+        return False
+    return personal_brand_profile_hash(canonical_personal_brand_profile_json(profile)) == row[
+        "profile_hash"
+    ]
+
+
+def seed_refinement_loop_constraints(connection: sqlite3.Connection) -> None:
+    """Seed durable Phase 6A loop constraints without overwriting edits."""
+    now = _utc_now()
+    constraints = [
+        (
+            "no_linkedin_auto_send",
+            "true",
+            "The loop must never send LinkedIn connection requests, DMs, or InMail.",
+        ),
+        (
+            "no_linkedin_scraping",
+            "true",
+            "The loop must never scrape or crawl LinkedIn.",
+        ),
+        (
+            "no_linkedin_auto_publish",
+            "true",
+            "The loop must never publish LinkedIn posts automatically.",
+        ),
+        (
+            "human_approval_required",
+            "true",
+            "Any future parameter change requires explicit human approval.",
+        ),
+        (
+            "loop_paused",
+            "false",
+            "Pause/kill switch for refinement proposal generation.",
+        ),
+        (
+            "mode",
+            "report_only",
+            "Use report_only for Phase 6A reports or assisted for human-approved Phase 6B applies.",
+        ),
+        (
+            "max_apply_per_run",
+            "1",
+            "Maximum human-approved refinements that may be applied from one run.",
+        ),
+        (
+            "max_proposals_per_run",
+            "3",
+            "Maximum checker-approved proposals to show in one run.",
+        ),
+    ]
+    connection.executemany(
+        """
+        INSERT INTO refinement_loop_constraints (
+            constraint_key,
+            constraint_value,
+            description,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(constraint_key) DO NOTHING
+        """,
+        (
+            (key, value, description, now)
+            for key, value, description in constraints
+        ),
+    )
+
+
+def _migrate_calendar_block_lifecycle_columns(
+    connection: sqlite3.Connection,
+) -> None:
+    """Add calendar sync lifecycle metadata to existing databases."""
+    columns = _column_names(connection, "calendar_blocks")
+    if columns and "status" not in columns:
+        connection.execute(
+            "ALTER TABLE calendar_blocks ADD COLUMN status TEXT NOT NULL DEFAULT 'confirmed'"
+        )
+
+
+def _migrate_interactions_connection_request_type(
+    connection: sqlite3.Connection,
+) -> None:
+    """Allow manual LinkedIn connection-request tracking in existing DBs."""
+    row = connection.execute(
+        """
+        SELECT sql
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'interactions'
+        """
+    ).fetchone()
+    if row is None or "linkedin_connection_request" in str(row["sql"]):
+        return
+
+    connection.executescript(
+        """
+        DROP INDEX IF EXISTS idx_interactions_prospect_id;
+        DROP INDEX IF EXISTS idx_interactions_interaction_type;
+
+        ALTER TABLE interactions RENAME TO interactions_legacy;
+
+        CREATE TABLE interactions (
+            id INTEGER PRIMARY KEY,
+            prospect_id INTEGER NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
+            interaction_type TEXT NOT NULL,
+            content TEXT,
+            direction TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK (
+                interaction_type IN (
+                    'outreach_draft',
+                    'follow_up_draft',
+                    'linkedin_connection_request',
+                    'reply_logged',
+                    'meeting_confirmed',
+                    'note'
+                )
+            ),
+            CHECK (direction IN ('outbound_draft', 'inbound_logged'))
+        );
+
+        INSERT INTO interactions (
+            id,
+            prospect_id,
+            interaction_type,
+            content,
+            direction,
+            created_at
+        )
+        SELECT
+            id,
+            prospect_id,
+            interaction_type,
+            content,
+            direction,
+            created_at
+        FROM interactions_legacy;
+
+        DROP TABLE interactions_legacy;
+
+        CREATE INDEX IF NOT EXISTS idx_interactions_prospect_id
+            ON interactions(prospect_id);
+        CREATE INDEX IF NOT EXISTS idx_interactions_interaction_type
+            ON interactions(interaction_type);
+        """
+    )
+
+
+def _migrate_interactions_lifecycle_columns(connection: sqlite3.Connection) -> None:
+    """Add draft lifecycle metadata to existing interaction tables."""
+    columns = _column_names(connection, "interactions")
+    if not columns:
+        return
+    if "status" not in columns:
+        connection.execute("ALTER TABLE interactions ADD COLUMN status TEXT")
+    if "source" not in columns:
+        connection.execute("ALTER TABLE interactions ADD COLUMN source TEXT")
+    if "updated_at" not in columns:
+        connection.execute("ALTER TABLE interactions ADD COLUMN updated_at TEXT")
+        connection.execute(
+            """
+            UPDATE interactions
+            SET updated_at = created_at
+            WHERE updated_at IS NULL
+            """
+        )
+
+
+def _migrate_content_posts_uploaded_image_source(
+    connection: sqlite3.Connection,
+) -> None:
+    """Rename legacy `user_upload` image source to `uploaded` in existing DBs."""
+    row = connection.execute(
+        """
+        SELECT sql
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'content_posts'
+        """
+    ).fetchone()
+    if row is None or "'user_upload'" not in str(row["sql"]):
+        return
+
+    connection.executescript(
+        """
+        DROP INDEX IF EXISTS idx_content_posts_status;
+
+        ALTER TABLE content_posts RENAME TO content_posts_legacy;
+
+        CREATE TABLE content_posts (
+            id INTEGER PRIMARY KEY,
+            draft_text TEXT NOT NULL,
+            image_source TEXT NOT NULL DEFAULT 'none',
+            image_path TEXT,
+            inspiration_source_notes TEXT,
+            status TEXT NOT NULL DEFAULT 'drafted',
+            engagement_metric REAL,
+            created_at TEXT NOT NULL,
+            CHECK (image_source IN ('uploaded', 'generated', 'none')),
+            CHECK (status IN ('drafted', 'approved', 'posted', 'rejected'))
+        );
+
+        INSERT INTO content_posts (
+            id,
+            draft_text,
+            image_source,
+            image_path,
+            inspiration_source_notes,
+            status,
+            engagement_metric,
+            created_at
+        )
+        SELECT
+            id,
+            draft_text,
+            CASE
+                WHEN image_source = 'user_upload' THEN 'uploaded'
+                ELSE image_source
+            END,
+            image_path,
+            inspiration_source_notes,
+            status,
+            engagement_metric,
+            created_at
+        FROM content_posts_legacy;
+
+        DROP TABLE content_posts_legacy;
+
+        CREATE INDEX IF NOT EXISTS idx_content_posts_status
+            ON content_posts(status);
+        """
+    )
+
+
+def _migrate_content_posts_lifecycle_columns(connection: sqlite3.Connection) -> None:
+    """Move content posts to the safe internal draft lifecycle statuses."""
+    row = connection.execute(
+        """
+        SELECT sql
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'content_posts'
+        """
+    ).fetchone()
+    if row is None:
+        return
+    sql = str(row["sql"])
+    columns = _column_names(connection, "content_posts")
+    needs_rebuild = (
+        "topic" not in columns
+        or "updated_at" not in columns
+        or "'drafted'" in sql
+        or "'posted'" in sql
+        or "'rejected'" in sql
+    )
+    if not needs_rebuild:
+        return
+
+    select_topic = "topic" if "topic" in columns else "NULL"
+    select_updated_at = "updated_at" if "updated_at" in columns else "created_at"
+    connection.executescript(
+        f"""
+        DROP INDEX IF EXISTS idx_content_posts_status;
+
+        ALTER TABLE content_posts RENAME TO content_posts_legacy;
+
+        CREATE TABLE content_posts (
+            id INTEGER PRIMARY KEY,
+            topic TEXT,
+            draft_text TEXT NOT NULL,
+            image_source TEXT NOT NULL DEFAULT 'none',
+            image_path TEXT,
+            inspiration_source_notes TEXT,
+            status TEXT NOT NULL DEFAULT 'draft',
+            engagement_metric REAL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK (image_source IN ('uploaded', 'generated', 'none')),
+            CHECK (
+                status IN (
+                    'draft',
+                    'saved',
+                    'approved_for_later_posting',
+                    'discarded'
+                )
+            )
+        );
+
+        INSERT INTO content_posts (
+            id,
+            topic,
+            draft_text,
+            image_source,
+            image_path,
+            inspiration_source_notes,
+            status,
+            engagement_metric,
+            created_at,
+            updated_at
+        )
+        SELECT
+            id,
+            {select_topic},
+            draft_text,
+            image_source,
+            image_path,
+            inspiration_source_notes,
+            CASE
+                WHEN status = 'drafted' THEN 'draft'
+                WHEN status = 'approved' THEN 'approved_for_later_posting'
+                WHEN status = 'rejected' THEN 'discarded'
+                ELSE status
+            END,
+            engagement_metric,
+            created_at,
+            {select_updated_at}
+        FROM content_posts_legacy
+        WHERE status != 'posted';
+
+        DROP TABLE content_posts_legacy;
+
+        CREATE INDEX IF NOT EXISTS idx_content_posts_status
+            ON content_posts(status);
+        """
+    )
+
+
+def _migrate_refinement_outcomes_explicit_columns(
+    connection: sqlite3.Connection,
+) -> None:
+    """Add explicit user-reported outcome metadata to existing DBs."""
+    columns = _column_names(connection, "refinement_outcomes")
+    if not columns:
+        return
+    additions = {
+        "target_type": "TEXT",
+        "target_id": "INTEGER",
+        "related_interaction_id": "INTEGER",
+        "outcome": "TEXT",
+        "notes": "TEXT",
+        "source": "TEXT",
+    }
+    for column_name, column_type in additions.items():
+        if column_name not in columns:
+            connection.execute(
+                f"ALTER TABLE refinement_outcomes ADD COLUMN {column_name} {column_type}"
+            )
+
+
+def _migrate_signal_scoring_columns(connection: sqlite3.Connection) -> None:
+    """Add nullable Phase 8C score fields without rewriting historical signals."""
+    columns = _column_names(connection, "signals")
+    if not columns:
+        return
+    additions = {
+        "profile_version": "INTEGER",
+        "scoring_config_version": "INTEGER",
+        "score_json": "TEXT",
+        "total_score": "REAL",
+        "scoring_confidence": "REAL",
+        "scoring_mode": "TEXT",
+        "scored_at": "TEXT",
+        "eligibility_status": "TEXT NOT NULL DEFAULT 'pending'",
+        "eligibility_reasons_json": "TEXT",
+    }
+    for column_name, column_type in additions.items():
+        if column_name not in columns:
+            connection.execute(f"ALTER TABLE signals ADD COLUMN {column_name} {column_type}")
+    table_sql_row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'signals'"
+    ).fetchone()
+    table_sql = str(table_sql_row["sql"]) if table_sql_row is not None else ""
+    if "'scored'" not in table_sql:
+        _rebuild_signals_for_phase8c(connection)
+
+
+def _rebuild_signals_for_phase8c(connection: sqlite3.Connection) -> None:
+    """Widen the legacy signal status constraint while preserving all rows."""
+    connection.executescript(
+        """
+        DROP INDEX IF EXISTS idx_signals_source_id;
+        DROP INDEX IF EXISTS idx_signals_source_external_id;
+        DROP INDEX IF EXISTS idx_signals_canonical_url;
+        DROP INDEX IF EXISTS idx_signals_content_hash;
+        DROP INDEX IF EXISTS idx_signals_dedupe_key;
+        DROP INDEX IF EXISTS idx_signals_published_at;
+        DROP INDEX IF EXISTS idx_signals_status;
+        DROP INDEX IF EXISTS idx_signals_score;
+        ALTER TABLE signals RENAME TO signals_phase8c_legacy;
+        CREATE TABLE signals (
+            id INTEGER PRIMARY KEY,
+            source_id INTEGER NOT NULL REFERENCES signal_sources(id) ON DELETE CASCADE,
+            external_id TEXT,
+            canonical_url TEXT,
+            title TEXT,
+            summary TEXT,
+            author TEXT,
+            published_at TEXT,
+            updated_at_source TEXT,
+            fetched_at TEXT NOT NULL,
+            content_hash TEXT,
+            dedupe_key TEXT,
+            duplicate_of_id INTEGER REFERENCES signals(id) ON DELETE SET NULL,
+            raw_payload_json TEXT NOT NULL,
+            normalized_json TEXT,
+            status TEXT NOT NULL,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            profile_version INTEGER REFERENCES personal_brand_profile(version),
+            scoring_config_version INTEGER REFERENCES signal_scoring_config(version),
+            score_json TEXT,
+            total_score REAL,
+            scoring_confidence REAL,
+            scoring_mode TEXT,
+            scored_at TEXT,
+            eligibility_status TEXT NOT NULL DEFAULT 'pending',
+            eligibility_reasons_json TEXT,
+            CHECK (status IN ('fetched', 'normalized', 'scored', 'ineligible', 'duplicate', 'failed')),
+            CHECK (eligibility_status IN ('pending', 'eligible', 'ineligible', 'scoring_failed')),
+            CHECK (total_score IS NULL OR (total_score >= 0 AND total_score <= 100)),
+            CHECK (scoring_confidence IS NULL OR (scoring_confidence >= 0 AND scoring_confidence <= 1))
+        );
+        INSERT INTO signals SELECT * FROM signals_phase8c_legacy;
+        DROP TABLE signals_phase8c_legacy;
+        CREATE INDEX IF NOT EXISTS idx_signals_source_id ON signals(source_id);
+        CREATE INDEX IF NOT EXISTS idx_signals_source_external_id ON signals(source_id, external_id);
+        CREATE INDEX IF NOT EXISTS idx_signals_canonical_url ON signals(canonical_url);
+        CREATE INDEX IF NOT EXISTS idx_signals_content_hash ON signals(content_hash);
+        CREATE INDEX IF NOT EXISTS idx_signals_dedupe_key ON signals(dedupe_key);
+        CREATE INDEX IF NOT EXISTS idx_signals_published_at ON signals(published_at);
+        CREATE INDEX IF NOT EXISTS idx_signals_status ON signals(status);
+        CREATE INDEX IF NOT EXISTS idx_signals_score ON signals(total_score DESC);
+        """
+    )
+
+
+def _column_names(connection: sqlite3.Connection, table_name: str) -> set[str]:
+    rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row["name"]) for row in rows}
 
 
 def _load_core_intent_rules(core_intent_path: str | Path) -> list[dict[str, str]]:

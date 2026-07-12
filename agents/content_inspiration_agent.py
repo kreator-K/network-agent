@@ -59,19 +59,20 @@ class ContentInspirationAgent:
         generate_image: bool = False,
     ) -> dict[str, Any]:
         """Draft a LinkedIn post and resolve image attachment metadata."""
-        prompt = self._build_prompt(topic, inspiration_notes)
+        prompt = self._build_prompt(topic, inspiration_notes, user_image_path)
         response = self.model_orchestration_agent.run_task(
             task_type="content_post_draft",
             prompt=prompt,
             expected_schema={"draft_text": str},
         )
         draft_text = self._extract_draft_text(response)
-        image_source, image_path = self._resolve_image(
+        image_source, image_path, image_error = self._resolve_image(
             topic=topic,
             user_image_path=user_image_path,
             generate_image=generate_image,
         )
-        return {
+        result = {
+            "topic": topic,
             "draft_text": draft_text,
             "image_source": image_source,
             "image_path": image_path,
@@ -79,33 +80,40 @@ class ContentInspirationAgent:
             "mode": response["mode"],
             "fallback_used": response["fallback_used"],
         }
+        if image_error is not None:
+            result["image_error"] = image_error
+        return result
 
     def save_draft_to_db(
         self,
         draft: dict[str, Any],
         database: sqlite3.Connection | str | Path,
     ) -> ContentPost:
-        """Persist a drafted content post with status `drafted`."""
+        """Persist a drafted content post with internal status `draft`."""
         created_at = _utc_now()
         connection, should_close = _coerce_connection(database)
         try:
             cursor = connection.execute(
                 """
                 INSERT INTO content_posts (
+                    topic,
                     draft_text,
                     image_source,
                     image_path,
                     inspiration_source_notes,
                     status,
-                    created_at
+                    created_at,
+                    updated_at
                 )
-                VALUES (?, ?, ?, ?, 'drafted', ?)
+                VALUES (?, ?, ?, ?, ?, 'draft', ?, ?)
                 """,
                 (
+                    draft.get("topic"),
                     draft["draft_text"],
                     draft["image_source"],
                     draft.get("image_path"),
                     draft.get("inspiration_source_notes"),
+                    created_at,
                     created_at,
                 ),
             )
@@ -131,7 +139,7 @@ class ContentInspirationAgent:
                 """
                 SELECT *
                 FROM content_posts
-                WHERE status = 'drafted'
+                WHERE status IN ('draft', 'saved', 'approved_for_later_posting')
                 ORDER BY created_at ASC, id ASC
                 """
             ).fetchall()
@@ -140,7 +148,12 @@ class ContentInspirationAgent:
             if should_close:
                 connection.close()
 
-    def _build_prompt(self, topic: str, inspiration_notes: str | None) -> str:
+    def _build_prompt(
+        self,
+        topic: str,
+        inspiration_notes: str | None,
+        user_image_path: str | None = None,
+    ) -> str:
         prompt_parts = [
             "Draft an original LinkedIn post.",
             "The output must be JSON with key draft_text.",
@@ -152,6 +165,14 @@ class ContentInspirationAgent:
         ]
         if inspiration_notes:
             prompt_parts.extend(["Inspiration notes:", inspiration_notes])
+        if user_image_path:
+            prompt_parts.extend(
+                [
+                    "Uploaded image context:",
+                    f"Image reference: {user_image_path}",
+                    "Use the uploaded image as context for the post, but do not claim visual details that are not provided in text.",
+                ]
+            )
         return "\n".join(prompt_parts)
 
     def _resolve_image(
@@ -159,15 +180,22 @@ class ContentInspirationAgent:
         topic: str,
         user_image_path: str | None,
         generate_image: bool,
-    ) -> tuple[ContentPostImageSource, str | None]:
+    ) -> tuple[ContentPostImageSource, str | None, str | None]:
         if user_image_path:
-            return "user_upload", user_image_path
+            return "uploaded", user_image_path, None
         if generate_image:
-            return "generated", image_gateway.generate_image(
-                prompt=f"LinkedIn post image for: {topic}",
-                mock_mode=settings.mock_mode,
-            )
-        return "none", None
+            try:
+                return (
+                    "generated",
+                    image_gateway.generate_image(
+                        prompt=f"LinkedIn post image for: {topic}",
+                        mock_mode=settings.mock_mode,
+                    ),
+                    None,
+                )
+            except Exception as exc:
+                return "none", None, str(exc)
+        return "none", None, None
 
     def _extract_draft_text(self, response: dict[str, Any]) -> str:
         result = response.get("result")
@@ -190,6 +218,7 @@ def _coerce_connection(
 def _content_post_from_row(row: sqlite3.Row) -> ContentPost:
     return ContentPost(
         id=row["id"],
+        topic=row["topic"],
         draft_text=row["draft_text"],
         image_source=row["image_source"],
         image_path=row["image_path"],
@@ -197,6 +226,7 @@ def _content_post_from_row(row: sqlite3.Row) -> ContentPost:
         status=row["status"],
         engagement_metric=row["engagement_metric"],
         created_at=row["created_at"],
+        updated_at=row["updated_at"],
     )
 
 

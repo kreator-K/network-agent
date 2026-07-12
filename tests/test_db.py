@@ -14,13 +14,22 @@ from db.models import Prospect, ProspectStatus, RefinementHistoryEntry
 
 EXPECTED_TABLES = [
     "calendar_blocks",
+    "content_opportunities",
     "content_posts",
+    "content_preference_feedback",
     "core_intent",
     "interactions",
+    "personal_brand_profile",
     "prospects",
     "refinable_parameters",
     "refinement_history",
+    "refinement_loop_constraints",
+    "refinement_loop_runs",
     "refinement_outcomes",
+    "refinement_proposals",
+    "signal_scoring_config",
+    "signal_sources",
+    "signals",
 ]
 
 
@@ -95,6 +104,22 @@ def test_initialize_database_seeds_core_intent_from_json(tmp_path: Path) -> None
             "rule_value": "21",
             "description": "Follow-up cadence floor.",
         }
+    ]
+
+
+def test_personal_brand_profile_table_has_versioning_columns(tmp_path: Path) -> None:
+    database_path = tmp_path / "network_agent.db"
+    initialize_database(database_path)
+
+    assert _column_names(database_path, "personal_brand_profile") == [
+        "id",
+        "version",
+        "schema_version",
+        "profile_json",
+        "profile_hash",
+        "is_active",
+        "created_at",
+        "activated_at",
     ]
 
 
@@ -212,6 +237,7 @@ def test_content_posts_table_created_with_correct_columns(tmp_path: Path) -> Non
 
     assert _column_names(database_path, "content_posts") == [
         "id",
+        "topic",
         "draft_text",
         "image_source",
         "image_path",
@@ -219,11 +245,12 @@ def test_content_posts_table_created_with_correct_columns(tmp_path: Path) -> Non
         "status",
         "engagement_metric",
         "created_at",
+        "updated_at",
     ]
 
 
 def test_content_posts_status_check_constraint(tmp_path: Path) -> None:
-    """Content post status accepts only drafted/approved/posted/rejected."""
+    """Content post status accepts only safe internal lifecycle states."""
     database_path = tmp_path / "network_agent.db"
     initialize_database(database_path)
 
@@ -236,7 +263,7 @@ def test_content_posts_status_check_constraint(tmp_path: Path) -> None:
                 status,
                 created_at
             )
-            VALUES ('Draft', 'none', 'drafted', '2026-01-01')
+            VALUES ('Draft', 'none', 'draft', '2026-01-01')
             """
         )
         with pytest.raises(sqlite3.IntegrityError):
@@ -253,6 +280,77 @@ def test_content_posts_status_check_constraint(tmp_path: Path) -> None:
             )
 
 
+def test_content_posts_image_source_check_constraint(tmp_path: Path) -> None:
+    """Content post images accept uploaded/generated/none only."""
+    database_path = tmp_path / "network_agent.db"
+    initialize_database(database_path)
+
+    with connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO content_posts (
+                draft_text,
+                image_source,
+                status,
+                created_at
+            )
+            VALUES ('Draft', 'uploaded', 'draft', '2026-01-01')
+            """
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO content_posts (
+                    draft_text,
+                    image_source,
+                    status,
+                    created_at
+                )
+                VALUES ('Draft', 'user_upload', 'draft', '2026-01-01')
+                """
+            )
+
+
+def test_init_db_migrates_legacy_user_upload_image_source(tmp_path: Path) -> None:
+    """Existing DBs using user_upload are migrated to uploaded."""
+    database_path = tmp_path / "network_agent.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE content_posts (
+                id INTEGER PRIMARY KEY,
+                draft_text TEXT NOT NULL,
+                image_source TEXT NOT NULL DEFAULT 'none',
+                image_path TEXT,
+                inspiration_source_notes TEXT,
+                status TEXT NOT NULL DEFAULT 'drafted',
+                engagement_metric REAL,
+                created_at TEXT NOT NULL,
+                CHECK (image_source IN ('user_upload', 'generated', 'none')),
+                CHECK (status IN ('drafted', 'approved', 'posted', 'rejected'))
+            );
+            INSERT INTO content_posts (
+                draft_text,
+                image_source,
+                image_path,
+                status,
+                created_at
+            )
+            VALUES ('Draft', 'user_upload', '/tmp/image.png', 'drafted', '2026-01-01');
+            """
+        )
+
+    initialize_database(database_path)
+
+    with connect(database_path) as connection:
+        row = connection.execute(
+            "SELECT image_source, status FROM content_posts WHERE id = 1"
+        ).fetchone()
+
+    assert row["image_source"] == "uploaded"
+    assert row["status"] == "draft"
+
+
 def test_calendar_blocks_table_created_with_correct_columns(tmp_path: Path) -> None:
     """The calendar_blocks table includes the expected inferred columns."""
     database_path = tmp_path / "network_agent.db"
@@ -265,9 +363,10 @@ def test_calendar_blocks_table_created_with_correct_columns(tmp_path: Path) -> N
         "start_time",
         "end_time",
         "timezone",
-        "notes",
-        "external_event_id",
-        "created_at",
+            "notes",
+            "external_event_id",
+            "status",
+            "created_at",
     ]
 
 
@@ -296,3 +395,136 @@ def test_refinable_parameters_unique_constraint(tmp_path: Path) -> None:
         connection.execute(insert_sql)
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(insert_sql)
+
+
+def test_refinement_outcomes_table_supports_explicit_user_outcomes(
+    tmp_path: Path,
+) -> None:
+    """Outcome rows can store explicit target metadata and notes."""
+    database_path = tmp_path / "network_agent.db"
+    initialize_database(database_path)
+
+    assert _column_names(database_path, "refinement_outcomes") == [
+        "id",
+        "agent_name",
+        "parameter_version",
+        "metric_value",
+        "target_type",
+        "target_id",
+        "related_interaction_id",
+        "outcome",
+        "notes",
+        "source",
+        "created_at",
+    ]
+
+    with connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO refinement_outcomes (
+                agent_name,
+                parameter_version,
+                metric_value,
+                target_type,
+                target_id,
+                outcome,
+                notes,
+                source,
+                created_at
+            )
+            VALUES (
+                'outreach_draft_agent',
+                1,
+                1.0,
+                'outreach',
+                7,
+                'replied_positive',
+                'Asked to chat next week',
+                'telegram_command',
+                '2026-01-01'
+            )
+            """
+        )
+
+
+def test_refinement_loop_tables_are_initialized(tmp_path: Path) -> None:
+    """Phase 6A loop constraints and run logs are durable SQLite tables."""
+    database_path = tmp_path / "network_agent.db"
+    initialize_database(database_path)
+
+    assert _column_names(database_path, "refinement_loop_constraints") == [
+        "constraint_key",
+        "constraint_value",
+        "description",
+        "updated_at",
+    ]
+    assert _column_names(database_path, "refinement_loop_runs") == [
+        "id",
+        "run_id",
+        "loop_type",
+        "mode",
+        "started_at",
+        "completed_at",
+        "status",
+        "outcomes_considered_count",
+        "proposals_created_count",
+        "proposals_applied_count",
+        "error_message",
+        "metadata_json",
+    ]
+    assert _column_names(database_path, "refinement_proposals") == [
+        "id",
+        "proposal_id",
+        "run_id",
+        "target_area",
+        "parameter_name",
+        "current_value",
+        "proposed_value",
+        "reason",
+        "evidence_json",
+        "risk_level",
+        "checker_status",
+        "core_intent_check_status",
+        "status",
+        "created_at",
+        "decided_at",
+        "metadata_json",
+    ]
+
+
+def test_refinement_loop_constraints_are_seeded_without_overwriting(
+    tmp_path: Path,
+) -> None:
+    """Default constraints are inserted once and human edits persist."""
+    database_path = tmp_path / "network_agent.db"
+    initialize_database(database_path)
+    with connect(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE refinement_loop_constraints
+            SET constraint_value = 'true'
+            WHERE constraint_key = 'loop_paused'
+            """
+        )
+
+    initialize_database(database_path)
+
+    with connect(database_path) as connection:
+        rows = fetch_all_rows(
+            connection,
+            """
+            SELECT constraint_key, constraint_value
+            FROM refinement_loop_constraints
+            ORDER BY constraint_key
+            """,
+        )
+
+    constraints = {row["constraint_key"]: row["constraint_value"] for row in rows}
+    assert constraints["no_linkedin_auto_send"] == "true"
+    assert constraints["no_linkedin_scraping"] == "true"
+    assert constraints["no_linkedin_auto_publish"] == "true"
+    assert constraints["human_approval_required"] == "true"
+    assert constraints["loop_paused"] == "true"
+    assert constraints["mode"] == "report_only"
+    assert constraints["max_apply_per_run"] == "1"
+    assert constraints["max_proposals_per_run"] == "3"

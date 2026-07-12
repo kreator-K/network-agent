@@ -83,9 +83,10 @@ def test_user_image_takes_precedence_over_generate_image_flag(
         generate_image=True,
     )
 
-    assert result["image_source"] == "user_upload"
+    assert result["image_source"] == "uploaded"
     assert result["image_path"] == "/tmp/user.png"
     image_generate.assert_not_called()
+    assert "Uploaded image context" in model.calls[0]["prompt"]
 
 
 def test_generate_image_used_when_no_user_image_provided(
@@ -107,8 +108,28 @@ def test_generate_image_used_when_no_user_image_provided(
     assert result["image_path"] == "mock://image.png"
     image_generate.assert_called_once_with(
         prompt="LinkedIn post image for: AI PM transitions",
-        mock_mode=True,
+        mock_mode=content_module.settings.mock_mode,
     )
+
+
+def test_image_gateway_failure_falls_back_to_text_only(
+    mocker: pytest_mock.MockerFixture,
+) -> None:
+    model = FakeModelOrchestrationAgent()
+    mocker.patch.object(
+        content_module.image_gateway,
+        "generate_image",
+        side_effect=RuntimeError("gateway unavailable"),
+    )
+
+    result = ContentInspirationAgent(model).draft_post(
+        "AI PM transitions",
+        generate_image=True,
+    )
+
+    assert result["image_source"] == "none"
+    assert result["image_path"] is None
+    assert "gateway unavailable" in result["image_error"]
 
 
 def test_no_image_when_neither_provided() -> None:
@@ -120,7 +141,7 @@ def test_no_image_when_neither_provided() -> None:
     assert result["image_path"] is None
 
 
-def test_save_draft_to_db_persists_with_drafted_status(database_path: Path) -> None:
+def test_save_draft_to_db_persists_with_draft_status(database_path: Path) -> None:
     agent = ContentInspirationAgent(FakeModelOrchestrationAgent())
     draft = {
         "draft_text": "Draft",
@@ -134,11 +155,11 @@ def test_save_draft_to_db_persists_with_drafted_status(database_path: Path) -> N
 
     assert post.id is not None
     assert post.draft_text == "Draft"
-    assert post.status == "drafted"
+    assert post.status == "draft"
     assert post.inspiration_source_notes == "Use a crisp hook."
 
 
-def test_get_pending_drafts_returns_only_drafted_status(database_path: Path) -> None:
+def test_get_pending_drafts_returns_draft_status(database_path: Path) -> None:
     agent = ContentInspirationAgent(FakeModelOrchestrationAgent())
     with connect(database_path) as connection:
         agent.save_draft_to_db(
@@ -156,7 +177,7 @@ def test_get_pending_drafts_returns_only_drafted_status(database_path: Path) -> 
     assert [post.draft_text for post in pending] == ["Draft"]
 
 
-def test_get_pending_drafts_excludes_posted_and_rejected(database_path: Path) -> None:
+def test_get_pending_drafts_excludes_discarded_status(database_path: Path) -> None:
     agent = ContentInspirationAgent(FakeModelOrchestrationAgent())
     with connect(database_path) as connection:
         agent.save_draft_to_db(
@@ -172,15 +193,20 @@ def test_get_pending_drafts_excludes_posted_and_rejected(database_path: Path) ->
             """
             INSERT INTO content_posts (draft_text, image_source, status, created_at)
             VALUES
-                ('Posted', 'none', 'posted', '2026-01-01'),
-                ('Rejected', 'none', 'rejected', '2026-01-01')
+                ('Saved', 'none', 'saved', '2026-01-01'),
+                ('Approved', 'none', 'approved_for_later_posting', '2026-01-01'),
+                ('Discarded', 'none', 'discarded', '2026-01-01')
             """
         )
 
         pending = agent.get_pending_drafts(connection)
 
-    assert [post.status for post in pending] == ["drafted"]
-    assert [post.draft_text for post in pending] == ["Draft"]
+    assert {post.status for post in pending} == {
+        "draft",
+        "saved",
+        "approved_for_later_posting",
+    }
+    assert {post.draft_text for post in pending} == {"Draft", "Saved", "Approved"}
 
 
 def test_mock_mode_produces_deterministic_draft() -> None:

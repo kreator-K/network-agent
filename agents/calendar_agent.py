@@ -80,7 +80,7 @@ class CalendarAgent:
         )
 
         try:
-            google_calendar_client.block_time(
+            event_id = google_calendar_client.block_time(
                 meeting_date=meeting_date,
                 start_time=start_time,
                 end_time=end_time,
@@ -88,7 +88,19 @@ class CalendarAgent:
                 title=f"Networking meeting for prospect {prospect_id}",
                 mock_mode=settings.mock_mode,
             )
+            if hasattr(tracker, "update_calendar_block_sync"):
+                calendar_block = tracker.update_calendar_block_sync(
+                    calendar_block.id or 0,
+                    event_id,
+                    "calendar_created",
+                )
         except NotImplementedError:
+            if hasattr(tracker, "update_calendar_block_sync"):
+                calendar_block = tracker.update_calendar_block_sync(
+                    calendar_block.id or 0,
+                    None,
+                    "calendar_failed",
+                )
             return {
                 "calendar_block": calendar_block,
                 "calendar_synced": False,

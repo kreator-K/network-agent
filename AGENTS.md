@@ -29,20 +29,24 @@ This is not an automation/spam tool. No agent may autonomously send a LinkedIn c
 `NetworkOrchestrator` coordinates:
 
 1. `ProspectDiscoveryAgent` - structured intake and enrichment of manually-provided prospect info. Does not search or scrape.
-2. `ProfileContextAgent` - extracts personalization signal from user-provided profile text/notes for use in outreach drafting.
+2. `ProfileContextAgent` - extracts deterministic prospect context from user-provided profile text/notes for outreach drafting, and owns deterministic personal-brand profile validation, version retrieval, and prompt-ready rendering. Personal-brand versions live in SQLite; the JSON seed is an initialization input only, and normal workflows use the active SQLite version.
 3. `OutreachDraftAgent` - drafts connection requests and follow-up messages. Permanently draft-only; never sends, because LinkedIn's public API does not support programmatic outreach for individual developer accounts.
 4. `RelationshipTrackerAgent` - CRM. Tracks contact status, last-touch date, follow-up-due flags, meeting status.
 5. `ContentInspirationAgent` - drafts LinkedIn posts inspired by (not copied from) high-engagement creator patterns in similar niches. Supports both user-uploaded images and agent-generated images (via image gateway). User-uploaded image takes precedence if both are provided in the same request.
 6. `CalendarAgent` - blocks calendar time on explicit meeting confirmation via `/meeting_confirmed`. Email invites are future scope, not MVP.
 7. `RefinementLoopAgent` - tracks reply/engagement outcomes for `OutreachDraftAgent` and `ContentInspirationAgent`, proposes refinements, and tests them against a fixed evaluation set. See Refinement Loop Rules below.
+8. `SignalIntelligenceAgent` - normalizes, canonicalizes, deduplicates, and persists items from explicitly approved public RSS or Atom feeds. In Phase 8C it also applies deterministic eligibility gates and scoring, requests bounded semantic analysis only through `ModelOrchestrationAgent`, combines auditable final scores, and persists reviewable content opportunities. It does not fetch directly, draft final posts, call image providers, discover prospects, interact with Telegram, schedule work, or publish to LinkedIn.
 
-Supporting integration module (not a decision-making agent):
+Supporting integration modules (not decision-making agents):
 
-8. `LinkedInPublishAgent` - thin wrapper around LinkedIn's Share/Posts API, built fresh once developer app approval is obtained. Only called after explicit human approval in Telegram. Has no content-generation logic.
+9. `LinkedInPublishAgent` - thin wrapper around LinkedIn's Share/Posts API, built fresh once developer app approval is obtained. Only called after explicit human approval in Telegram. Has no content-generation logic.
+10. `public_signal_gateway` - thin HTTP and RSS/Atom parsing boundary for explicitly approved public sources. It validates URLs and network targets but does not persist, score, or generate content.
 
 ## Refinement Loop Rules
 
 - `core_intent.json` is human-editable and loaded into the SQLite `core_intent` table on startup or explicit reload. Agents read the SQLite table, not the JSON file directly.
+- Personal-brand profile facts are human-controlled, versioned in SQLite, and separate from both `core_intent` and `refinable_parameters`. Refinement workflows must not silently change them.
+- Agents must distinguish interests, affiliations, attendance, employment, completed work, achievements, and verified personal experience. They must not invent personal experiences or convert broad positioning into factual claims.
 - `RefinementLoopAgent` may only modify the SQLite `refinable_parameters` table (tone variations, phrasing patterns, structural choices).
 - `RefinementLoopAgent` must never modify `core_intent.json` or the SQLite `core_intent` table. Changes to `core_intent.json` require explicit human edit, never agent-written.
 - Every refinement is versioned and logged to the SQLite `refinement_history` table with: version, timestamp, what changed, why, metric before/after, and a diff against v1 (the original).
@@ -56,10 +60,13 @@ Telegram bot is the primary interface. All approval, editing, and confirmation f
 
 ## Development Rules
 
-- Keep the MVP scoped to the 7 agents + 1 integration module above. Do not add new agents without updating this file first.
+- Keep the MVP scoped to the 8 specialist agents and supporting integration modules above. Do not add new agents without updating this file first.
 - Prefer structured data (typed dataclasses/pydantic models) over loose dicts, consistent with prior projects (`video-data-agent`, `ads-agent`).
 - Keep Telegram bot handlers thin - they validate input and call `NetworkOrchestrator`, never agents directly.
+- Telegram profile commands call `NetworkOrchestrator`; they never access profile tables directly.
 - Keep model orchestration separate from bot handlers and from business logic.
+- Content opportunities are not post drafts. `ContentInspirationAgent` remains the future owner of approved post packages; personal-brand facts and scoring configuration remain human-controlled.
+- `public_signal_gateway` is the only public-feed HTTP boundary. It validates RSS/Atom URLs, blocks LinkedIn and private-network targets, and does not write SQLite or call models.
 - Use mock mode by default for all model/image calls during development (`MOCK_MODE=true`), same pattern as `ads-agent`.
 - Use Nvidia NIM as the default model provider (same pattern as `video-data-agent`), configurable via `.env`.
 

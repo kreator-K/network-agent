@@ -1,13 +1,25 @@
-"""Profile context extraction agent.
+"""Profile context extraction and personal-brand profile agent.
 
 MVP simplification: this agent does not call an LLM. It structures only the
 manual prospect fields the user has already provided. Future phases may route
 richer profile text extraction through ModelOrchestrationAgent.
 """
 
+import json
+import sqlite3
+from pathlib import Path
 from typing import Any
 
-from db.models import Prospect
+from db.database import (
+    activate_personal_brand_profile_version,
+    create_personal_brand_profile_version,
+    get_active_personal_brand_profile_row,
+    get_personal_brand_profile_by_id,
+    get_personal_brand_profile_by_version,
+    list_personal_brand_profile_rows,
+    connect,
+)
+from db.models import PersonalBrandProfile, PersonalBrandProfileData, Prospect
 
 
 CORE_CONTEXT_FIELDS = ("role_title", "company", "notes")
@@ -77,6 +89,200 @@ class ProfileContextAgent:
             "recommendation": _recommendation_for_missing_fields(missing_fields),
         }
 
+    def validate_personal_brand_profile(
+        self,
+        profile: PersonalBrandProfileData | dict[str, Any],
+    ) -> PersonalBrandProfileData:
+        """Validate user-authored profile data without using a model."""
+        if isinstance(profile, PersonalBrandProfileData):
+            return profile
+        return PersonalBrandProfileData.model_validate(profile)
+
+    def save_profile(
+        self,
+        profile: PersonalBrandProfileData | dict[str, Any],
+        database: sqlite3.Connection | str | Path,
+        activate: bool = True,
+    ) -> PersonalBrandProfile:
+        """Append a profile version and optionally make it active."""
+        validated = self.validate_personal_brand_profile(profile)
+        connection, should_close = _coerce_connection(database)
+        try:
+            row = create_personal_brand_profile_version(
+                connection,
+                validated,
+                activate=activate,
+            )
+            connection.commit()
+            return _profile_from_row(row)
+        finally:
+            if should_close:
+                connection.close()
+
+    def get_active_profile(
+        self,
+        database: sqlite3.Connection | str | Path,
+    ) -> PersonalBrandProfile | None:
+        """Return the active profile, or None before profile setup."""
+        connection, should_close = _coerce_connection(database)
+        try:
+            row = get_active_personal_brand_profile_row(connection)
+            return _profile_from_row(row) if row is not None else None
+        finally:
+            if should_close:
+                connection.close()
+
+    def get_profile(
+        self,
+        version: int,
+        database: sqlite3.Connection | str | Path,
+    ) -> PersonalBrandProfile:
+        """Return one immutable profile version."""
+        connection, should_close = _coerce_connection(database)
+        try:
+            row = get_personal_brand_profile_by_version(connection, version)
+            if row is None:
+                raise PersonalBrandProfileError(
+                    f"Personal-brand profile version {version} does not exist."
+                )
+            return _profile_from_row(row)
+        finally:
+            if should_close:
+                connection.close()
+
+    def activate_profile(
+        self,
+        version: int,
+        database: sqlite3.Connection | str | Path,
+    ) -> PersonalBrandProfile:
+        """Atomically activate an existing immutable profile version."""
+        connection, should_close = _coerce_connection(database)
+        try:
+            active = activate_personal_brand_profile_version(connection, version)
+            if active is None:
+                raise PersonalBrandProfileError(
+                    f"Personal-brand profile version {version} does not exist."
+                )
+            connection.commit()
+            return _profile_from_row(active)
+        finally:
+            if should_close:
+                connection.close()
+
+    def build_personal_brand_context(
+        self,
+        profile: PersonalBrandProfile | PersonalBrandProfileData,
+    ) -> str:
+        """Render deterministic profile context for future prompts."""
+        data = _profile_data_from_record(profile)
+        fields: list[tuple[str, str | list[str] | None]] = [
+            ("Professional identity", data.professional_identity),
+            ("Current program", data.current_program),
+            ("Institutions", data.institutions),
+            ("Career focus", data.career_focus),
+            ("Content pillars", data.content_pillars),
+            ("Target audiences", data.target_audiences),
+            ("Preferred tone", data.preferred_tone),
+            ("Preferred depth", data.preferred_depth),
+            ("Post formats", data.preferred_post_formats),
+            ("Humor preferences", data.humor_preferences),
+            ("Personal experience boundaries", data.personal_experience_boundaries),
+            ("Verified experiences", data.verified_experiences),
+            ("Allowed personal claims", data.allowed_personal_claims),
+            ("Claims requiring confirmation", data.claims_requiring_confirmation),
+            ("Topics to avoid", data.topics_to_avoid),
+            ("Posting preferences", data.posting_preferences),
+            ("Networking goals", data.networking_goals),
+            ("Desired network types", data.desired_network_types),
+            ("Industries of interest", data.industries_of_interest),
+            ("Companies of interest", data.companies_of_interest),
+            ("Geographic preferences", data.geographic_preferences),
+            ("Profile notes", data.notes),
+        ]
+        lines: list[str] = []
+        for label, value in fields:
+            if isinstance(value, list) and value:
+                lines.append(f"{label}: {', '.join(value)}")
+            elif isinstance(value, str) and value:
+                lines.append(f"{label}: {value}")
+        return "\n".join(lines)
+
+    def list_profile_versions(
+        self,
+        database: sqlite3.Connection | str | Path,
+        limit: int = 10,
+    ) -> list[PersonalBrandProfile]:
+        """List immutable profile versions, newest first."""
+        connection, should_close = _coerce_connection(database)
+        try:
+            return [
+                _profile_from_row(row)
+                for row in list_personal_brand_profile_rows(connection, limit)
+            ]
+        finally:
+            if should_close:
+                connection.close()
+
+    def get_profile_by_id(
+        self,
+        profile_id: int,
+        database: sqlite3.Connection | str | Path,
+    ) -> PersonalBrandProfile:
+        """Return an immutable profile version by database ID."""
+        connection, should_close = _coerce_connection(database)
+        try:
+            row = get_personal_brand_profile_by_id(connection, profile_id)
+            if row is None:
+                raise PersonalBrandProfileError(
+                    f"Personal-brand profile id {profile_id} does not exist."
+                )
+            return _profile_from_row(row)
+        finally:
+            if should_close:
+                connection.close()
+
+    def summarize_personal_brand_profile(
+        self,
+        profile: PersonalBrandProfile,
+    ) -> dict[str, Any]:
+        """Return a concise display-safe summary of a profile version."""
+        data = _profile_data_from_record(profile)
+        return {
+            "id": profile.id,
+            "version": profile.version,
+            "schema_version": profile.schema_version,
+            "is_active": profile.is_active,
+            "created_at": profile.created_at,
+            "activated_at": profile.activated_at,
+            "professional_identity": data.professional_identity,
+            "current_program": data.current_program,
+            "institutions": data.institutions,
+            "career_focus": data.career_focus,
+            "content_pillars": data.content_pillars,
+            "target_audiences": data.target_audiences,
+            "preferred_tone": data.preferred_tone,
+            "preferred_depth": data.preferred_depth,
+            "humor_preferences": data.humor_preferences,
+            "personal_experience_boundaries": data.personal_experience_boundaries,
+            "verified_experiences": data.verified_experiences,
+            "allowed_personal_claims": data.allowed_personal_claims,
+            "claims_requiring_confirmation": data.claims_requiring_confirmation,
+            "topics_to_avoid": data.topics_to_avoid,
+            "networking_goals": data.networking_goals,
+            "industries_of_interest": data.industries_of_interest,
+            "companies_of_interest": data.companies_of_interest,
+            "geographic_preferences": data.geographic_preferences,
+        }
+
+    # Explicit names make the orchestrator API easy to read while retaining a
+    # small set of profile operations in this existing agent.
+    create_personal_brand_profile = save_profile
+    get_active_personal_brand_profile = get_active_profile
+    create_personal_brand_profile_version = save_profile
+    activate_personal_brand_profile_version = activate_profile
+    list_personal_brand_profile_versions = list_profile_versions
+    render_personal_brand_context = build_personal_brand_context
+
 
 def _extract_talking_points(notes: str | None) -> list[str]:
     cleaned = _clean_optional(notes)
@@ -112,3 +318,39 @@ def _clean_optional(value: Any) -> str | None:
         value = str(value)
     cleaned = " ".join(value.strip().split())
     return cleaned or None
+
+
+class PersonalBrandProfileError(ValueError):
+    """Raised when a requested profile version is unavailable."""
+
+
+def _coerce_connection(
+    database: sqlite3.Connection | str | Path,
+) -> tuple[sqlite3.Connection, bool]:
+    if isinstance(database, sqlite3.Connection):
+        return database, False
+    return connect(database), True
+
+
+def _profile_data_from_record(
+    profile: PersonalBrandProfile | PersonalBrandProfileData,
+) -> PersonalBrandProfileData:
+    if isinstance(profile, PersonalBrandProfileData):
+        return profile
+    try:
+        return PersonalBrandProfileData.model_validate(json.loads(profile.profile_json))
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise PersonalBrandProfileError("Stored personal-brand profile is invalid.") from exc
+
+
+def _profile_from_row(row: sqlite3.Row) -> PersonalBrandProfile:
+    return PersonalBrandProfile(
+        id=row["id"],
+        version=row["version"],
+        schema_version=row["schema_version"],
+        profile_json=row["profile_json"],
+        profile_hash=row["profile_hash"],
+        is_active=bool(row["is_active"]),
+        created_at=row["created_at"],
+        activated_at=row["activated_at"],
+    )

@@ -1,5 +1,6 @@
 """Tests for NetworkOrchestrator workflow coordination."""
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any, cast
@@ -7,6 +8,7 @@ from typing import Any, cast
 import pytest
 
 from agents.orchestrator import NetworkOrchestrator, NetworkOrchestratorError
+from db.database import initialize_database
 from db.models import (
     CalendarBlock,
     ContentPost,
@@ -51,12 +53,14 @@ def _interaction(
         content=content,
         direction="outbound_draft",
         created_at="2026-07-08T00:00:00+00:00",
+        updated_at="2026-07-08T00:00:00+00:00",
     )
 
 
-def _content_post(post_id: int = 1, status: str = "drafted") -> ContentPost:
+def _content_post(post_id: int = 1, status: str = "draft") -> ContentPost:
     return ContentPost(
         id=post_id,
+        topic="AI product launches",
         draft_text="A draft post",
         image_source="none",
         image_path=None,
@@ -64,6 +68,7 @@ def _content_post(post_id: int = 1, status: str = "drafted") -> ContentPost:
         status=cast(ContentPostStatus, status),
         engagement_metric=None,
         created_at="2026-07-08T00:00:00+00:00",
+        updated_at="2026-07-08T00:00:00+00:00",
     )
 
 
@@ -108,6 +113,8 @@ class FakeTracker:
         interaction_type: str,
         content: str | None = None,
         direction: str = "outbound_draft",
+        status: str | None = None,
+        source: str | None = None,
     ) -> Interaction:
         self.logged_interactions.append(
             {
@@ -115,6 +122,8 @@ class FakeTracker:
                 "interaction_type": interaction_type,
                 "content": content,
                 "direction": direction,
+                "status": status,
+                "source": source,
             }
         )
         return _interaction(
@@ -374,14 +383,18 @@ def test_draft_outreach_logs_outreach_draft_interaction() -> None:
     )
 
     assert result["context_warning"] is None
-    assert tracker.logged_interactions == [
-        {
-            "prospect_id": 1,
-            "interaction_type": "outreach_draft",
-            "content": "Could we connect?",
-            "direction": "outbound_draft",
-        }
-    ]
+    logged = tracker.logged_interactions[0]
+    assert logged["prospect_id"] == 1
+    assert logged["interaction_type"] == "outreach_draft"
+    assert logged["direction"] == "outbound_draft"
+    assert logged["status"] == "drafted"
+    assert logged["source"] == "telegram"
+    assert json.loads(logged["content"]) == {
+        "ask_type": "career_guidance",
+        "draft_text": "Could we connect?",
+        "source": "telegram",
+        "status": "drafted",
+    }
 
 
 def test_draft_followup_uses_history_and_logs_followup() -> None:
@@ -397,7 +410,12 @@ def test_draft_followup_uses_history_and_logs_followup() -> None:
     assert result["draft"]["draft_text"] == "Following up."
     assert outreach.followup_calls[0]["history"] == tracker.history
     assert tracker.logged_interactions[0]["interaction_type"] == "follow_up_draft"
-    assert tracker.logged_interactions[0]["content"] == "Following up."
+    assert json.loads(tracker.logged_interactions[0]["content"]) == {
+        "draft_text": "Following up.",
+        "source": "telegram",
+        "status": "drafted",
+    }
+    assert tracker.logged_interactions[0]["status"] == "drafted"
 
 
 def test_get_followups_due_formats_for_telegram_display() -> None:
@@ -565,3 +583,30 @@ def test_orchestrator_never_imports_model_orchestration_agent_directly() -> None
     source = Path("agents/orchestrator.py").read_text(encoding="utf-8")
 
     assert "ModelOrchestrationAgent" not in source
+
+
+def test_personal_brand_profile_workflows_use_immutable_versions(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "network_agent.db"
+    initialize_database(database_path)
+    orchestrator = NetworkOrchestrator()
+
+    summary = orchestrator.get_brand_profile_summary(database=database_path)
+    assert summary is not None
+    assert summary["version"] == 1
+
+    changed = orchestrator.update_brand_profile_field(
+        field_name="content_pillars",
+        value="product management, AI products",
+        database=database_path,
+    )
+    assert changed["version"] == 2
+    assert changed["is_active"] is True
+
+    versions = orchestrator.list_brand_profile_versions(database=database_path)
+    assert [version["version"] for version in versions] == [2, 1]
+
+    restored = orchestrator.activate_brand_profile(1, database=database_path)
+    assert restored["version"] == 1
+    assert restored["is_active"] is True

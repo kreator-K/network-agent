@@ -1,5 +1,10 @@
 .venv/
 __pycache__/
 .env
+.env.local
 *.db
 *.pyc
+client_secret*.json
+credentials*.json
+token*.json
+*.pem

@@ -81,6 +81,8 @@ def test_draft_connection_request_uses_model_boundary_and_safe_prompt() -> None:
     assert call["task_type"] == "outreach_draft"
     assert call["expected_schema"] == {"draft_text": str}
     assert "Do not invent shared connections" in call["prompt"]
+    assert "do not imply the user works or worked" in call["prompt"]
+    assert "Do not claim the user has product management" in call["prompt"]
     assert "300 characters or fewer" in call["prompt"]
     assert "Ada Lovelace" in call["prompt"]
     assert "Research Lead" in call["prompt"]
@@ -131,6 +133,7 @@ def test_draft_followup_message_uses_history_and_followup_task() -> None:
             content="First message",
             direction="outbound_draft",
             created_at="2026-01-01",
+            updated_at="2026-01-01",
         ),
         Interaction(
             id=2,
@@ -139,6 +142,7 @@ def test_draft_followup_message_uses_history_and_followup_task() -> None:
             content="Thanks for reaching out.",
             direction="inbound_logged",
             created_at="2026-01-02",
+            updated_at="2026-01-02",
         ),
     ]
 
@@ -175,6 +179,24 @@ def test_validate_against_core_intent_flags_fabrication_language() -> None:
 
     assert result["passed"] is False
     assert "unstated shared connection" in result["warning"]
+    assert result["matched_pattern"] is not None
+
+
+def test_validate_against_core_intent_flags_unstated_experience_language() -> None:
+    result = OutreachDraftAgent(
+        FakeModelOrchestrationAgent()
+    ).validate_against_core_intent(
+        "As someone with experience in product management at Nvidia, I'd love to connect.",
+        [
+            {
+                "rule_key": "no_fabrication",
+                "description": "No invented skills, credentials, or unstated claims.",
+            }
+        ],
+    )
+
+    assert result["passed"] is False
+    assert result["warning"] is not None
     assert result["matched_pattern"] is not None
 
 
