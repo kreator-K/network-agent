@@ -104,11 +104,16 @@ def test_successful_start_initializes_session_and_preserves_environment(
     )
     monkeypatch.setenv("RUNTIME_TEST_SENTINEL", "preserved")
 
-    run_async(runtime.start())
+    async def scenario() -> tuple[Any, bool, bool]:
+        await runtime.start()
+        started = runtime.is_started
+        typed_client = isinstance(runtime.client, GoogleCalendarMCPClient)
+        await runtime.close()
+        return captured["parameters"], started, typed_client
 
-    parameters = captured["parameters"]
-    assert runtime.is_started is True
-    assert isinstance(runtime.client, GoogleCalendarMCPClient)
+    parameters, started, typed_client = run_async(scenario())
+    assert started is True
+    assert typed_client is True
     assert parameters.command == str(Path("/usr/bin/node").resolve())
     assert parameters.args == [
         str(
@@ -212,23 +217,42 @@ def test_client_requires_started_runtime(files: tuple[Path, Path]) -> None:
 
 def test_repeated_start_does_not_create_another_subprocess(files: tuple[Path, Path]) -> None:
     runtime, _, _, _, captured = make_runtime(files)
-    run_async(runtime.start())
-    first_parameters = captured["parameters"]
-    run_async(runtime.start())
-    assert captured["parameters"] is first_parameters
+    async def scenario() -> bool:
+        await runtime.start()
+        first_parameters = captured["parameters"]
+        await runtime.start()
+        return captured["parameters"] is first_parameters
+
+    assert run_async(scenario()) is True
 
 
 def test_close_releases_resources_and_is_idempotent(files: tuple[Path, Path]) -> None:
     runtime, transport, session_context, _, _ = make_runtime(files)
-    run_async(runtime.start())
-    run_async(runtime.close())
-    run_async(runtime.close())
+    async def scenario() -> tuple[bool, bool, bool]:
+        await runtime.start()
+        await runtime.close()
+        await runtime.close()
+        with pytest.raises(GoogleCalendarMCPUnavailableError):
+            _ = runtime.client
+        return transport.closed, session_context.closed, runtime.is_started
 
-    assert transport.closed is True
-    assert session_context.closed is True
-    assert runtime.is_started is False
-    with pytest.raises(GoogleCalendarMCPUnavailableError):
-        _ = runtime.client
+    transport_closed, session_closed, started = run_async(scenario())
+    assert transport_closed is True
+    assert session_closed is True
+    assert started is False
+
+
+def test_cross_task_close_exits_contexts_without_lifecycle_error(
+    files: tuple[Path, Path],
+) -> None:
+    runtime, transport, session_context, _, _ = make_runtime(files)
+
+    async def scenario() -> tuple[bool, bool]:
+        await asyncio.create_task(runtime.start())
+        await asyncio.create_task(runtime.close())
+        return transport.closed, session_context.closed
+
+    assert run_async(scenario()) == (True, True)
 
 
 def test_partial_startup_failure_cleans_up_and_does_not_leak_secrets(
