@@ -322,8 +322,16 @@ CREATE TABLE IF NOT EXISTS calendar_blocks (
     notes TEXT,
     external_event_id TEXT,
     status TEXT NOT NULL DEFAULT 'confirmed',
+    idempotency_key TEXT UNIQUE,
+    provider TEXT,
+    provider_event_id TEXT,
+    provider_event_url TEXT,
+    sync_status TEXT NOT NULL DEFAULT 'pending',
+    last_error TEXT,
     created_at TEXT NOT NULL,
-    CHECK (status IN ('confirmed', 'calendar_created', 'calendar_failed'))
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (status IN ('confirmed', 'calendar_created', 'calendar_failed')),
+    CHECK (sync_status IN ('pending', 'created', 'failed'))
 );
 
 CREATE TABLE IF NOT EXISTS briefing_settings (

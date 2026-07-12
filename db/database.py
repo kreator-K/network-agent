@@ -428,6 +428,23 @@ def _migrate_calendar_block_lifecycle_columns(
         connection.execute(
             "ALTER TABLE calendar_blocks ADD COLUMN status TEXT NOT NULL DEFAULT 'confirmed'"
         )
+    additions = {
+        "idempotency_key": "TEXT",
+        "provider": "TEXT",
+        "provider_event_id": "TEXT",
+        "provider_event_url": "TEXT",
+        "sync_status": "TEXT NOT NULL DEFAULT 'pending'",
+        "last_error": "TEXT",
+        "updated_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    }
+    columns = _column_names(connection, "calendar_blocks")
+    for name, definition in additions.items():
+        if name not in columns:
+            connection.execute(f"ALTER TABLE calendar_blocks ADD COLUMN {name} {definition}")
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_blocks_idempotency "
+        "ON calendar_blocks(idempotency_key) WHERE idempotency_key IS NOT NULL"
+    )
 
 
 def _migrate_interactions_connection_request_type(

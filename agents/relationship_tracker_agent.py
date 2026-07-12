@@ -569,7 +569,14 @@ def _calendar_block_from_row(row: sqlite3.Row) -> CalendarBlock:
         notes=row["notes"],
         external_event_id=row["external_event_id"],
         status=row["status"] if "status" in row.keys() else "confirmed",
+        idempotency_key=row["idempotency_key"] if "idempotency_key" in row.keys() else None,
+        provider=row["provider"] if "provider" in row.keys() else None,
+        provider_event_id=row["provider_event_id"] if "provider_event_id" in row.keys() else None,
+        provider_event_url=row["provider_event_url"] if "provider_event_url" in row.keys() else None,
+        sync_status=row["sync_status"] if "sync_status" in row.keys() else "pending",
+        last_error=row["last_error"] if "last_error" in row.keys() else None,
         created_at=row["created_at"],
+        updated_at=row["updated_at"] if "updated_at" in row.keys() else None,
     )
 
 

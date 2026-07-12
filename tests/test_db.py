@@ -384,7 +384,14 @@ def test_calendar_blocks_table_created_with_correct_columns(tmp_path: Path) -> N
             "notes",
             "external_event_id",
             "status",
+            "idempotency_key",
+            "provider",
+            "provider_event_id",
+            "provider_event_url",
+            "sync_status",
+            "last_error",
             "created_at",
+            "updated_at",
     ]
 
 

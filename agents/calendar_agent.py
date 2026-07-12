@@ -1,10 +1,15 @@
 """Calendar coordination agent."""
 
-from datetime import date, datetime
-from typing import Protocol
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
+from pathlib import Path
+import sqlite3
+from typing import Any, Protocol
 
 from config.settings import settings
 from db.models import CalendarBlock
+from db.database import connect
+from integrations.google_calendar_mcp_client import GoogleCalendarMCPError
 from integrations import google_calendar_client
 
 
@@ -18,6 +23,23 @@ class InvalidMeetingDateError(CalendarAgentError):
 
 class InvalidMeetingTimeError(CalendarAgentError):
     """Raised when start_time is not HH:MM."""
+
+
+class CalendarPersistenceError(CalendarAgentError):
+    """Raised when calendar synchronization state cannot be persisted."""
+
+
+class CalendarProviderError(CalendarAgentError):
+    """Raised when the calendar provider cannot create the event."""
+
+
+@dataclass(frozen=True)
+class CalendarBlockResult:
+    idempotency_key: str
+    status: str
+    event_id: str | None
+    event_url: str | None
+    was_existing: bool
 
 
 class TrackerProtocol(Protocol):
@@ -51,6 +73,58 @@ class CalendarAgent:
     Outputs:
         Calendar block records plus sync status metadata.
     """
+
+    def __init__(self, database_path: str | Path | None = None, calendar_client: Any = None) -> None:
+        self.database_path = Path(database_path) if database_path is not None else None
+        self.calendar_client = calendar_client
+
+    async def create_confirmed_meeting_event(self, *, prospect_id: str, prospect_name: str, start: datetime, end: datetime, timezone: str, description: str = "") -> CalendarBlockResult:
+        """Create one confirmed event with durable, retry-safe idempotency."""
+        if not str(prospect_id).strip():
+            raise CalendarAgentError("prospect_id must be non-empty.")
+        if not prospect_name.strip():
+            raise CalendarAgentError("prospect_name must be non-empty.")
+        if not timezone.strip():
+            raise CalendarAgentError("timezone must be non-empty.")
+        if start.tzinfo is None or start.utcoffset() is None:
+            raise CalendarAgentError("start must be timezone-aware.")
+        if end.tzinfo is None or end.utcoffset() is None:
+            raise CalendarAgentError("end must be timezone-aware.")
+        if end <= start:
+            raise CalendarAgentError("end must be later than start.")
+        if self.database_path is None:
+            raise CalendarPersistenceError("A database_path is required for event persistence.")
+        database_path = self.database_path
+        if self.calendar_client is None:
+            raise CalendarProviderError("An injected Google Calendar client is required.")
+        key = f"google_calendar:{prospect_id}:{start.isoformat()}"
+        with connect(database_path) as connection:
+            row = connection.execute("SELECT * FROM calendar_blocks WHERE idempotency_key = ?", (key,)).fetchone()
+            if row is not None and row["sync_status"] == "created":
+                return _calendar_result(row, True)
+            try:
+                if row is None:
+                    now = datetime.now(UTC).isoformat()
+                    connection.execute("""INSERT INTO calendar_blocks
+                        (prospect_id, scheduled_date, start_time, end_time, timezone, idempotency_key, provider, sync_status, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, 'google_calendar', 'pending', ?, ?)""",
+                        (int(prospect_id), start.date().isoformat(), start.strftime("%H:%M"), end.strftime("%H:%M"), timezone, key, now, now))
+            except sqlite3.IntegrityError as exc:
+                raise CalendarPersistenceError("Could not create the unique calendar synchronization record.") from exc
+            try:
+                event = await self.calendar_client.create_event(calendar_id="primary", summary=f"Meeting with {prospect_name}", description=description, start=start, end=end, timezone=timezone)
+            except Exception as exc:
+                safe = str(exc)[:500] if isinstance(exc, GoogleCalendarMCPError) else "Calendar provider request failed."
+                connection.execute("UPDATE calendar_blocks SET sync_status = 'failed', last_error = ?, updated_at = ? WHERE idempotency_key = ?", (safe, datetime.now(UTC).isoformat(), key))
+                raise CalendarProviderError(safe) from exc
+            if not event.event_id:
+                raise CalendarProviderError("Calendar provider returned no event ID.")
+            now = datetime.now(UTC).isoformat()
+            connection.execute("UPDATE calendar_blocks SET sync_status = 'created', provider_event_id = ?, provider_event_url = ?, external_event_id = ?, updated_at = ? WHERE idempotency_key = ?", (event.event_id, event.html_link, event.event_id, now, key))
+            row = connection.execute("SELECT * FROM calendar_blocks WHERE idempotency_key = ?", (key,)).fetchone()
+        if row is None:
+            raise CalendarPersistenceError("Calendar synchronization record disappeared.")
+        return _calendar_result(row, False)
 
     def confirm_meeting(
         self,
@@ -154,3 +228,7 @@ def _validate_time(value: str) -> None:
         raise InvalidMeetingTimeError(
             "time values must be valid 24-hour HH:MM strings."
         )
+
+
+def _calendar_result(row: sqlite3.Row, was_existing: bool) -> CalendarBlockResult:
+    return CalendarBlockResult(row["idempotency_key"], row["sync_status"], row["provider_event_id"], row["provider_event_url"], was_existing)

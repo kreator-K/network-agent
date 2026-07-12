@@ -507,4 +507,11 @@ class CalendarBlock(DataLayerModel):
     notes: str | None = None
     external_event_id: str | None = None
     status: Literal["confirmed", "calendar_created", "calendar_failed"] = "confirmed"
+    idempotency_key: str | None = None
+    provider: str | None = None
+    provider_event_id: str | None = None
+    provider_event_url: str | None = None
+    sync_status: Literal["pending", "created", "failed"] = "pending"
+    last_error: str | None = None
     created_at: str
+    updated_at: str | None = None
