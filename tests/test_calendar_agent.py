@@ -1,6 +1,9 @@
 """Tests for explicit calendar confirmation behavior."""
 
-from datetime import date, timedelta
+import asyncio
+import sqlite3
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -9,10 +12,91 @@ import pytest_mock
 from agents import calendar_agent as calendar_module
 from agents.calendar_agent import (
     CalendarAgent,
+    CalendarAgentError,
+    CalendarProviderError,
     InvalidMeetingDateError,
     InvalidMeetingTimeError,
 )
 from db.models import CalendarBlock
+from db.database import initialize_database
+from integrations.google_calendar_mcp_client import CalendarEventResult
+
+
+class _CalendarClient:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.calls = 0
+        self.error = error
+
+    async def create_event(self, **kwargs: object) -> CalendarEventResult:
+        self.calls += 1
+        if self.error:
+            raise self.error
+        return CalendarEventResult("event-1", "https://calendar/event-1", "created")
+
+
+def _event_database(tmp_path: Path) -> Path:
+    path = tmp_path / "calendar-events.db"
+    initialize_database(path)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO prospects (name, source, status, created_at, updated_at) "
+            "VALUES ('Alex', 'manual', 'not_contacted', 'now', 'now')"
+        )
+    return path
+
+
+def test_confirmed_event_is_idempotent_and_persisted(tmp_path: Path) -> None:
+    client = _CalendarClient()
+    agent = CalendarAgent(_event_database(tmp_path), client)
+    start = datetime(2026, 2, 1, 14, tzinfo=UTC)
+    first = asyncio.run(agent.create_confirmed_meeting_event(
+        prospect_id="1", prospect_name="Alex", start=start,
+        end=start + timedelta(hours=1), timezone="America/New_York",
+    ))
+    second = asyncio.run(agent.create_confirmed_meeting_event(
+        prospect_id="1", prospect_name="Alex", start=start,
+        end=start + timedelta(hours=1), timezone="America/New_York",
+    ))
+    assert first.status == "created"
+    assert second.was_existing is True
+    assert client.calls == 1
+    assert agent.database_path is not None
+    with sqlite3.connect(agent.database_path) as connection:
+        assert connection.execute(
+            "SELECT provider_event_id, provider_event_url FROM calendar_blocks"
+        ).fetchone() == ("event-1", "https://calendar/event-1")
+
+
+def test_failed_event_can_be_retried(tmp_path: Path) -> None:
+    client = _CalendarClient(RuntimeError("provider down"))
+    agent = CalendarAgent(_event_database(tmp_path), client)
+    start = datetime(2026, 2, 1, 14, tzinfo=UTC)
+    with pytest.raises(CalendarProviderError):
+        asyncio.run(agent.create_confirmed_meeting_event(
+            prospect_id="1", prospect_name="Alex", start=start,
+            end=start + timedelta(hours=1), timezone="America/New_York",
+        ))
+    client.error = None
+    result = asyncio.run(agent.create_confirmed_meeting_event(
+        prospect_id="1", prospect_name="Alex", start=start,
+        end=start + timedelta(hours=1), timezone="America/New_York",
+    ))
+    assert result.status == "created"
+    assert client.calls == 2
+
+
+@pytest.mark.parametrize("start,end", [
+    (datetime(2026, 2, 1, 15, tzinfo=UTC), datetime(2026, 2, 1, 14, tzinfo=UTC)),
+    (datetime(2026, 2, 1, 14, tzinfo=UTC), datetime(2026, 2, 1, 14, tzinfo=UTC)),
+])
+def test_confirmed_event_rejects_invalid_range(tmp_path: Path, start: datetime, end: datetime) -> None:
+    client = _CalendarClient()
+    with pytest.raises(CalendarAgentError):
+        asyncio.run(CalendarAgent(_event_database(tmp_path), client).create_confirmed_meeting_event(
+            prospect_id="1", prospect_name="Alex", start=start, end=end,
+            timezone="America/New_York",
+        ))
+    assert client.calls == 0
 
 
 class FakeTracker:

@@ -334,6 +334,35 @@ class NetworkOrchestrator:
                 exc,
             )
 
+    async def create_confirmed_meeting_event(
+        self,
+        *,
+        prospect_id: int,
+        start: datetime,
+        end: datetime,
+        timezone: str,
+        description: str = "",
+        database: DatabaseRef,
+    ) -> dict[str, Any]:
+        """Create a provider event after explicit meeting confirmation."""
+        try:
+            prospect = self._tracker(database).get_prospect(prospect_id)
+            result = await self.calendar_agent.create_confirmed_meeting_event(
+                prospect_id=str(prospect.id),
+                prospect_name=prospect.name,
+                start=start,
+                end=end,
+                timezone=timezone,
+                description=description,
+            )
+            return {"prospect": prospect, "event": result}
+        except Exception as exc:
+            _raise_with_context(
+                "create_confirmed_meeting_event",
+                {"prospect_id": prospect_id},
+                exc,
+            )
+
     def draft_content_post(
         self,
         topic: str,

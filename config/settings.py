@@ -34,6 +34,10 @@ class Settings:
     google_calendar_mcp_token_path: str = os.getenv(
         "GOOGLE_CALENDAR_MCP_TOKEN_PATH", ""
     )
+    google_calendar_id: str = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+    google_calendar_timezone: str = os.getenv(
+        "GOOGLE_CALENDAR_TIMEZONE", "America/New_York"
+    )
     followup_cadence_days: int = int(os.getenv("FOLLOWUP_CADENCE_DAYS", "21"))
     database_path: str = os.getenv("DATABASE_PATH", "network_agent.db")
     generate_image_for_draft_posts: bool = _env_bool(

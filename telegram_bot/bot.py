@@ -1,6 +1,7 @@
 """Telegram bot application bootstrap."""
 
 import logging
+from pathlib import Path
 
 from telegram.ext import (
     Application,
@@ -12,7 +13,10 @@ from telegram.ext import (
 )
 
 from config.settings import settings
+from agents.calendar_agent import CalendarAgent
+from agents.orchestrator import NetworkOrchestrator
 from db.database import initialize_database
+from integrations.google_calendar_mcp_runtime import GoogleCalendarMCPRuntime
 from telegram_bot import handlers
 
 
@@ -32,8 +36,17 @@ def build_bot() -> Application:
         "mock" if settings.mock_mode else "real",
         "report_only",
     )
-    application = Application.builder().token(settings.telegram_bot_token).build()
+    application = (
+        Application.builder()
+        .token(settings.telegram_bot_token)
+        .post_init(_post_init)
+        .post_shutdown(_post_shutdown)
+        .build()
+    )
     application.bot_data["database_path"] = settings.database_path
+    application.bot_data["orchestrator"] = NetworkOrchestrator(
+        calendar_agent=CalendarAgent(Path(settings.database_path))
+    )
 
     application.add_handler(CommandHandler("start", handlers.start))
     application.add_handler(CommandHandler("add_prospect", handlers.add_prospect))
@@ -118,6 +131,28 @@ def build_bot() -> Application:
     application.add_handler(MessageHandler(filters.PHOTO, handlers.photo_reply))
     application.add_error_handler(error_handler)
     return application
+
+
+async def _post_init(application: Application) -> None:
+    """Start one persistent optional calendar runtime for the bot lifecycle."""
+    runtime = GoogleCalendarMCPRuntime()
+    application.bot_data["calendar_runtime"] = runtime
+    try:
+        await runtime.start()
+    except Exception as exc:
+        logger.warning("Google Calendar MCP unavailable; bot will continue: %s", type(exc).__name__)
+        application.bot_data["calendar_unavailable"] = True
+        return
+    application.bot_data["orchestrator"] = NetworkOrchestrator(
+        calendar_agent=CalendarAgent(Path(settings.database_path), runtime.client)
+    )
+
+
+async def _post_shutdown(application: Application) -> None:
+    """Close the persistent calendar runtime, including partial startup."""
+    runtime = application.bot_data.get("calendar_runtime")
+    if runtime is not None:
+        await runtime.close()
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:

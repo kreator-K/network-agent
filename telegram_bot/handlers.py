@@ -3,9 +3,10 @@
 import logging
 import json
 import shlex
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -365,17 +366,38 @@ async def meeting_confirmed(update: Any, context: Any) -> None:
         await _reply(update, "end_time must be HH:MM.")
         return
 
-    result = _orchestrator(context).confirm_meeting(
-        prospect_id=prospect_id,
-        meeting_date=parts[1],
-        start_time=parts[2],
-        end_time=parts[3] if len(parts) == 4 else None,
-        database=_database(context),
-    )
-    await _reply(
-        update,
-        f"Meeting confirmed for prospect {prospect_id}. calendar_synced={result['calendar_synced']}",
-    )
+    timezone = settings.google_calendar_timezone
+    try:
+        zone = ZoneInfo(timezone)
+        start = datetime.strptime(
+            f"{parts[1]} {parts[2]}", "%Y-%m-%d %H:%M"
+        ).replace(tzinfo=zone)
+        end = (
+            datetime.strptime(f"{parts[1]} {parts[3]}", "%Y-%m-%d %H:%M").replace(tzinfo=zone)
+            if len(parts) == 4
+            else start + timedelta(hours=1)
+        )
+        result = await _orchestrator(context).create_confirmed_meeting_event(
+            prospect_id=prospect_id,
+            start=start,
+            end=end,
+            timezone=timezone,
+            database=_database(context),
+        )
+    except Exception as exc:
+        logger.warning("Meeting confirmation failed: %s", type(exc).__name__)
+        await _reply(update, "Could not sync this confirmed meeting. Please try again.")
+        return
+    event = result["event"]
+    status = getattr(event, "status", None)
+    if status == "created" and getattr(event, "was_existing", False):
+        message = f"Meeting was already scheduled for prospect {prospect_id}."
+    else:
+        message = f"Meeting scheduled for prospect {prospect_id}."
+    link = getattr(event, "event_url", None)
+    if link:
+        message += f"\nCalendar link: {link}"
+    await _reply(update, message)
 
 
 async def draft_post(update: Any, context: Any) -> None:

@@ -4,12 +4,12 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 import sqlite3
-from typing import Protocol
+from typing import Any, Protocol
 
 from config.settings import settings
 from db.models import CalendarBlock
 from db.database import connect
-from integrations.google_calendar_mcp_client import GoogleCalendarMCPClient, GoogleCalendarMCPError
+from integrations.google_calendar_mcp_client import GoogleCalendarMCPError
 from integrations import google_calendar_client
 
 
@@ -74,7 +74,7 @@ class CalendarAgent:
         Calendar block records plus sync status metadata.
     """
 
-    def __init__(self, database_path: str | Path | None = None, calendar_client: GoogleCalendarMCPClient | None = None) -> None:
+    def __init__(self, database_path: str | Path | None = None, calendar_client: Any = None) -> None:
         self.database_path = Path(database_path) if database_path is not None else None
         self.calendar_client = calendar_client
 
@@ -94,10 +94,11 @@ class CalendarAgent:
             raise CalendarAgentError("end must be later than start.")
         if self.database_path is None:
             raise CalendarPersistenceError("A database_path is required for event persistence.")
+        database_path = self.database_path
         if self.calendar_client is None:
             raise CalendarProviderError("An injected Google Calendar client is required.")
         key = f"google_calendar:{prospect_id}:{start.isoformat()}"
-        with connect(self.database_path) as connection:
+        with connect(database_path) as connection:
             row = connection.execute("SELECT * FROM calendar_blocks WHERE idempotency_key = ?", (key,)).fetchone()
             if row is not None and row["sync_status"] == "created":
                 return _calendar_result(row, True)
@@ -111,15 +112,31 @@ class CalendarAgent:
             except sqlite3.IntegrityError as exc:
                 raise CalendarPersistenceError("Could not create the unique calendar synchronization record.") from exc
             try:
-                event = await self.calendar_client.create_event(calendar_id="primary", summary=f"Meeting with {prospect_name}", description=description, start=start, end=end, timezone=timezone)
+                event = await self.calendar_client.create_event(calendar_id=settings.google_calendar_id, summary=f"Meeting with {prospect_name}", description=description, start=start, end=end, timezone=timezone)
             except Exception as exc:
                 safe = str(exc)[:500] if isinstance(exc, GoogleCalendarMCPError) else "Calendar provider request failed."
                 connection.execute("UPDATE calendar_blocks SET sync_status = 'failed', last_error = ?, updated_at = ? WHERE idempotency_key = ?", (safe, datetime.now(UTC).isoformat(), key))
+                connection.commit()
                 raise CalendarProviderError(safe) from exc
             if not event.event_id:
+                connection.execute(
+                    "UPDATE calendar_blocks SET sync_status = 'failed', last_error = ?, updated_at = ? WHERE idempotency_key = ?",
+                    ("Calendar provider returned no event ID.", datetime.now(UTC).isoformat(), key),
+                )
+                connection.commit()
                 raise CalendarProviderError("Calendar provider returned no event ID.")
             now = datetime.now(UTC).isoformat()
             connection.execute("UPDATE calendar_blocks SET sync_status = 'created', provider_event_id = ?, provider_event_url = ?, external_event_id = ?, updated_at = ? WHERE idempotency_key = ?", (event.event_id, event.html_link, event.event_id, now, key))
+            connection.execute(
+                "UPDATE prospects SET status = 'meeting_confirmed', updated_at = ? WHERE id = ?",
+                (now, int(prospect_id)),
+            )
+            connection.execute(
+                """INSERT INTO interactions
+                (prospect_id, interaction_type, content, direction, created_at, updated_at)
+                VALUES (?, 'meeting_confirmed', ?, 'inbound_logged', ?, ?)""",
+                (int(prospect_id), description or None, now, now),
+            )
             row = connection.execute("SELECT * FROM calendar_blocks WHERE idempotency_key = ?", (key,)).fetchone()
         if row is None:
             raise CalendarPersistenceError("Calendar synchronization record disappeared.")
