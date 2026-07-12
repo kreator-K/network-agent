@@ -61,7 +61,8 @@ def test_success_and_exact_tool_payload() -> None:
     assert result.html_link == "https://calendar.google/e/1"
     assert result.status == "confirmed"
     assert name == "create-event"
-    assert set(payload) == {"calendarId", "summary", "description", "start", "end", "timeZone", "sendUpdates"}
+    assert set(payload) == {"account", "calendarId", "summary", "description", "start", "end", "timeZone", "sendUpdates"}
+    assert payload["account"] == "normal"
     assert "attendees" not in payload
     assert payload["sendUpdates"] == "none"
     assert payload["start"].endswith("+00:00") and payload["end"].endswith("+00:00")

@@ -35,6 +35,7 @@ class Settings:
         "GOOGLE_CALENDAR_MCP_TOKEN_PATH", ""
     )
     google_calendar_id: str = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+    google_calendar_account: str = os.getenv("GOOGLE_CALENDAR_ACCOUNT", "normal")
     google_calendar_timezone: str = os.getenv(
         "GOOGLE_CALENDAR_TIMEZONE", "America/New_York"
     )

@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
+from config.settings import settings
+
 
 class GoogleCalendarMCPError(RuntimeError):
     """Base error for controlled Google Calendar MCP failures."""
@@ -61,6 +63,7 @@ class GoogleCalendarMCPClient:
                 "Google Calendar MCP session is unavailable."
             )
         payload = {
+            "account": settings.google_calendar_account,
             "calendarId": calendar_id,
             "summary": summary,
             "description": description,
