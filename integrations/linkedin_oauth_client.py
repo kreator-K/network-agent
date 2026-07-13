@@ -11,6 +11,9 @@ import json
 import secrets
 import base64
 import time
+import hashlib
+import sqlite3
+from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,6 +38,94 @@ class LinkedInTokenSet:
     refresh_token: str | None
     expires_in: int | None
     scope: str
+    id_token: str | None = None
+
+
+@dataclass(frozen=True)
+class LinkedInOAuthState:
+    state: str
+    telegram_user_id: str
+    telegram_chat_id: str
+    expires_at: str
+    requested_scopes: str
+    redirect_uri: str
+
+
+class LinkedInOAuthStateStore:
+    """SQLite-backed, one-time OAuth state repository."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    @staticmethod
+    def _hash(state: str) -> str:
+        return hashlib.sha256(state.encode("utf-8")).hexdigest()
+
+    def create(
+        self, *, telegram_user_id: str, telegram_chat_id: str,
+        scopes: str, redirect_uri: str, ttl_seconds: int,
+    ) -> LinkedInOAuthState:
+        raw_state = secrets.token_urlsafe(32)
+        expires = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+        expires_at = expires.isoformat()
+        self.connection.execute(
+            """INSERT INTO linkedin_oauth_states
+            (state_hash, telegram_user_id, telegram_chat_id, status, expires_at,
+             created_at, requested_scopes, redirect_uri)
+            VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)""",
+            (self._hash(raw_state), str(telegram_user_id), str(telegram_chat_id),
+             expires_at, datetime.now(UTC).isoformat(), scopes, redirect_uri),
+        )
+        self.connection.commit()
+        return LinkedInOAuthState(raw_state, str(telegram_user_id), str(telegram_chat_id), expires_at, scopes, redirect_uri)
+
+    def consume(self, state: str) -> sqlite3.Row:
+        if not state.strip():
+            raise LinkedInOAuthError("unknown_state")
+        now = datetime.now(UTC).isoformat()
+        row = self.connection.execute(
+            "SELECT * FROM linkedin_oauth_states WHERE state_hash = ?", (self._hash(state),)
+        ).fetchone()
+        if row is None:
+            raise LinkedInOAuthError("unknown_state")
+        if row["status"] != "pending":
+            raise LinkedInOAuthError(f"{row['status']}_state")
+        if row["expires_at"] <= now:
+            self.connection.execute(
+                "UPDATE linkedin_oauth_states SET status='expired' WHERE id=?", (row["id"],)
+            )
+            self.connection.commit()
+            raise LinkedInOAuthError("expired_state")
+        updated = self.connection.execute(
+            "UPDATE linkedin_oauth_states SET status='consumed', consumed_at=? WHERE id=? AND status='pending'",
+            (now, row["id"]),
+        ).rowcount
+        self.connection.commit()
+        if updated != 1:
+            raise LinkedInOAuthError("consumed_state")
+        return row
+
+    def cancel_pending(self) -> int:
+        result = self.connection.execute(
+            "UPDATE linkedin_oauth_states SET status='cancelled' WHERE status='pending'", ()
+        )
+        self.connection.commit()
+        return result.rowcount
+
+    def expire_stale(self) -> int:
+        result = self.connection.execute(
+            "UPDATE linkedin_oauth_states SET status='expired' WHERE status='pending' AND expires_at <= ?",
+            (datetime.now(UTC).isoformat(),),
+        )
+        self.connection.commit()
+        return result.rowcount
+
+    def history(self, limit: int = 10) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT id, status, requested_scopes, created_at, expires_at, consumed_at FROM linkedin_oauth_states ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 class LinkedInOAuthClient:
@@ -82,7 +173,7 @@ class LinkedInOAuthClient:
         )
         return f"{AUTHORIZATION_URL}?{query}", csrf_state
 
-    def exchange_code(self, code: str, *, state_valid: bool = True) -> LinkedInTokenSet:
+    def exchange_code(self, code: str, *, state_valid: bool = True, persist_tokens: bool = True) -> LinkedInTokenSet:
         """Exchange one callback code and persist only its encrypted token set."""
         if not code.strip() or not state_valid:
             raise LinkedInOAuthError("LinkedIn OAuth callback validation failed.")
@@ -108,10 +199,29 @@ class LinkedInOAuthClient:
             access_token=str(access_token),
             refresh_token=str(payload["refresh_token"]) if payload.get("refresh_token") else None,
             expires_in=int(payload["expires_in"]) if payload.get("expires_in") is not None else None,
-            scope=str(payload.get("scope") or " ".join(self.scopes)),
+                scope=str(payload.get("scope") or " ".join(self.scopes)),
+            id_token=str(payload["id_token"]) if payload.get("id_token") else None,
         )
-        self.save_tokens(token_set)
+        if persist_tokens:
+            self.save_tokens(token_set)
         return token_set
+
+    def fetch_userinfo(self, access_token: str) -> dict[str, Any]:
+        """Resolve OIDC identity from LinkedIn's official userinfo endpoint."""
+        response = self.http_session.get(
+            "https://api.linkedin.com/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=self.timeout_seconds,
+        )
+        if response.status_code != 200:
+            raise LinkedInOAuthError("LinkedIn OIDC userinfo request failed.")
+        try:
+            payload = response.json()
+        except (ValueError, TypeError) as exc:
+            raise LinkedInOAuthError("LinkedIn OIDC userinfo response is invalid.") from exc
+        if not isinstance(payload, dict) or not payload.get("sub"):
+            raise LinkedInOAuthError("LinkedIn OIDC identity is missing a subject.")
+        return payload
 
     def save_tokens(self, tokens: LinkedInTokenSet) -> None:
         """Encrypt token material before writing it to the configured path."""
@@ -128,6 +238,7 @@ class LinkedInOAuthClient:
                 refresh_token=str(payload["refresh_token"]) if payload.get("refresh_token") else None,
                 expires_in=int(payload["expires_in"]) if payload.get("expires_in") is not None else None,
                 scope=str(payload["scope"]),
+                id_token=str(payload["id_token"]) if payload.get("id_token") else None,
             )
         except (OSError, InvalidToken, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise LinkedInOAuthError("Stored LinkedIn OAuth tokens could not be decrypted.") from exc

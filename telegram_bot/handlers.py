@@ -97,9 +97,59 @@ async def start(update: Any, context: Any) -> None:
                 "/discover_candidates",
                 "/prospect_candidates",
                 "/approve_candidate <candidate_id>",
+                "/linkedin_connect",
+                "/linkedin_connection_status",
+                "/linkedin_access_check",
+                "/linkedin_reauthorize",
+                "/linkedin_disconnect",
+                "/linkedin_oauth_history",
             ]
         ),
     )
+
+
+async def linkedin_connect(update: Any, context: Any) -> None:
+    """Start the direct LinkedIn OAuth flow; no provider call is made here."""
+    try:
+        result = _orchestrator(context).prepare_linkedin_authorization(
+            telegram_user_id=str(update.effective_user.id),
+            telegram_chat_id=str(update.effective_chat.id), database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, "LinkedIn connection is not configured. Check the bot logs.")
+        return
+    await _reply(update, f"Open this authorization link to connect LinkedIn:\n{result['authorization_url']}\nRequested permissions: {', '.join(result['scopes'])}.\nConnecting does not publish anything.\nThe link expires in 10 minutes.")
+
+
+async def linkedin_connection_status(update: Any, context: Any) -> None:
+    try:
+        result = _orchestrator(context).get_linkedin_connection_status(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "LinkedIn connection status is unavailable.")
+        return
+    await _reply(update, f"LinkedIn status: {result['status']}\nScopes: {', '.join(result.get('granted_scopes', [])) or 'none'}\nPublishing mode: {result['publishing_mode']}\nReal publishing available: no")
+
+
+async def linkedin_access_check(update: Any, context: Any) -> None:
+    await linkedin_connection_status(update, context)
+
+
+async def linkedin_reauthorize(update: Any, context: Any) -> None:
+    await linkedin_connect(update, context)
+
+
+async def linkedin_disconnect(update: Any, context: Any) -> None:
+    query = InlineKeyboardMarkup([[InlineKeyboardButton("Confirm disconnect", callback_data="linkedin_disconnect_confirm")]])
+    await _reply(update, "This revokes local LinkedIn credentials. Nothing will be published.", query)
+
+
+async def linkedin_oauth_history(update: Any, context: Any) -> None:
+    try:
+        rows = _orchestrator(context).list_linkedin_oauth_history(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "LinkedIn authorization history is unavailable.")
+        return
+    await _reply(update, "No LinkedIn authorization attempts yet." if not rows else "\n".join(f"{row['created_at']} | {row['status']} | scopes={row['requested_scopes']}" for row in rows))
 
 
 async def briefing_now(update: Any, context: Any) -> None:
@@ -1008,6 +1058,14 @@ async def button_callback(update: Any, context: Any) -> None:
     query = update.callback_query
     await query.answer()
     data = query.data or ""
+    if data == "linkedin_disconnect_confirm":
+        try:
+            _orchestrator(context).disconnect_linkedin(database=_database(context))
+        except NetworkOrchestratorError:
+            await query.edit_message_text("Could not revoke the LinkedIn connection.")
+            return
+        await query.edit_message_text("LinkedIn connection revoked. Nothing was published.")
+        return
     if data.startswith("outreach_manual_sent:") or data.startswith("manual_sent:"):
         callback = _parse_outreach_callback(data)
         if callback is None:

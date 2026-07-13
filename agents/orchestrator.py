@@ -18,6 +18,9 @@ from agents.relationship_tracker_agent import RelationshipTrackerAgent
 from agents.signal_intelligence_agent import SignalIntelligenceAgent
 from db.database import connect
 from db.models import ContentPost, PersonalBrandProfile, PersonalBrandProfileData, Prospect
+from config.settings import settings
+from integrations.linkedin_oauth_callback import LinkedInCredentialStore, complete_linkedin_callback
+from integrations.linkedin_oauth_client import LinkedInOAuthClient, LinkedInOAuthStateStore
 
 
 DatabaseRef = str | Path
@@ -91,6 +94,104 @@ class NetworkOrchestrator:
     def handle(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Legacy command-shaped entrypoint retained for scaffold handlers."""
         return {"command": command, "payload": payload, "status": "unimplemented"}
+
+    def prepare_linkedin_authorization(
+        self, *, telegram_user_id: str, telegram_chat_id: str, database: DatabaseRef,
+    ) -> dict[str, Any]:
+        """Create a one-time consent request; authorization never publishes."""
+        try:
+            client = self._linkedin_client()
+            connection, should_close = _coerce_connection(database)
+            try:
+                states = LinkedInOAuthStateStore(connection)
+                states.expire_stale()
+                states.cancel_pending()
+                state = states.create(
+                    telegram_user_id=str(telegram_user_id), telegram_chat_id=str(telegram_chat_id),
+                    scopes=" ".join(client.scopes), redirect_uri=client.redirect_uri,
+                    ttl_seconds=settings.linkedin_oauth_state_ttl_seconds,
+                )
+            finally:
+                if should_close:
+                    connection.close()
+            url, _ = client.authorization_url(state=state.state)
+            return {"authorization_url": url, "expires_at": state.expires_at, "scopes": list(client.scopes), "message": "Connecting LinkedIn does not publish anything."}
+        except Exception as exc:
+            _raise_with_context("prepare_linkedin_authorization", {}, exc)
+
+    def complete_linkedin_authorization(self, params: dict[str, str], *, database: DatabaseRef) -> dict[str, Any]:
+        """Complete a callback using the orchestrator-owned provider workflow."""
+        try:
+            client = self._linkedin_client()
+            connection, should_close = _coerce_connection(database)
+            try:
+                result = complete_linkedin_callback(
+                    params, connection=connection, oauth_client=client,
+                    credentials=LinkedInCredentialStore(connection, settings.linkedin_token_encryption_key),
+                )
+            finally:
+                if should_close:
+                    connection.close()
+            return result
+        except Exception as exc:
+            _raise_with_context("complete_linkedin_authorization", {}, exc)
+
+    def get_linkedin_connection_status(self, *, database: DatabaseRef) -> dict[str, Any]:
+        try:
+            connection, should_close = _coerce_connection(database)
+            try:
+                return LinkedInCredentialStore(connection, settings.linkedin_token_encryption_key).status(settings.linkedin_publish_mode)
+            finally:
+                if should_close:
+                    connection.close()
+        except Exception as exc:
+            _raise_with_context("get_linkedin_connection_status", {}, exc)
+
+    def disconnect_linkedin(self, *, database: DatabaseRef) -> dict[str, str]:
+        try:
+            connection, should_close = _coerce_connection(database)
+            try:
+                LinkedInCredentialStore(connection, settings.linkedin_token_encryption_key).disconnect()
+            finally:
+                if should_close:
+                    connection.close()
+            return {"status": "revoked", "message": "LinkedIn connection revoked locally. Nothing was published."}
+        except Exception as exc:
+            _raise_with_context("disconnect_linkedin", {}, exc)
+
+    def reauthorize_linkedin(self, *, telegram_user_id: str, telegram_chat_id: str, database: DatabaseRef) -> dict[str, Any]:
+        return self.prepare_linkedin_authorization(telegram_user_id=telegram_user_id, telegram_chat_id=telegram_chat_id, database=database)
+
+    def list_linkedin_oauth_history(self, *, database: DatabaseRef) -> list[dict[str, Any]]:
+        try:
+            connection, should_close = _coerce_connection(database)
+            try:
+                return LinkedInOAuthStateStore(connection).history()
+            finally:
+                if should_close:
+                    connection.close()
+        except Exception as exc:
+            _raise_with_context("list_linkedin_oauth_history", {}, exc)
+
+    def expire_linkedin_oauth_states(self, *, database: DatabaseRef) -> int:
+        connection, should_close = _coerce_connection(database)
+        try:
+            return LinkedInOAuthStateStore(connection).expire_stale()
+        finally:
+            if should_close:
+                connection.close()
+
+    @staticmethod
+    def _linkedin_client() -> LinkedInOAuthClient:
+        return LinkedInOAuthClient(
+            client_id=settings.linkedin_client_id,
+            client_secret=settings.linkedin_client_secret,
+            redirect_uri=settings.linkedin_redirect_uri,
+            encryption_key=settings.linkedin_token_encryption_key,
+            token_path=settings.linkedin_token_path,
+            scopes=settings.linkedin_oauth_scopes,
+            timeout_seconds=settings.linkedin_request_timeout_seconds,
+        )
 
     def add_prospect(
         self,

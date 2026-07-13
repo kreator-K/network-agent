@@ -464,6 +464,8 @@ CREATE TABLE IF NOT EXISTS linkedin_oauth_states (
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
     consumed_at TEXT,
+    requested_scopes TEXT NOT NULL DEFAULT 'openid profile w_member_social',
+    redirect_uri TEXT NOT NULL DEFAULT '',
     CHECK (status IN ('pending', 'consumed', 'expired', 'cancelled', 'failed'))
 );
 
@@ -478,7 +480,8 @@ CREATE TABLE IF NOT EXISTS linkedin_credentials (
     status TEXT NOT NULL DEFAULT 'active',
     revoked_at TEXT,
     metadata_json TEXT NOT NULL DEFAULT '{}',
-    CHECK (status IN ('active', 'expired', 'revoked'))
+    member_display_name TEXT,
+    CHECK (status IN ('active', 'expired', 'revoked', 'invalid', 'reauthorization_required'))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_linkedin_credentials_active

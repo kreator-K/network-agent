@@ -48,6 +48,7 @@ def initialize_database(
         _migrate_refinement_outcomes_explicit_columns(connection)
         _migrate_calendar_block_lifecycle_columns(connection)
         _migrate_signal_scoring_columns(connection)
+        _migrate_linkedin_oauth_columns(connection)
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_signals_score ON signals(total_score DESC)"
         )
@@ -860,6 +861,18 @@ def _normalize_core_intent_rule(rule: dict[str, Any]) -> dict[str, str]:
         "rule_value": rule_value,
         "description": description,
     }
+
+
+def _migrate_linkedin_oauth_columns(connection: sqlite3.Connection) -> None:
+    """Add B1 metadata columns to databases created before the OAuth flow."""
+    state_columns = {row[1] for row in connection.execute("PRAGMA table_info(linkedin_oauth_states)")}
+    if "requested_scopes" not in state_columns:
+        connection.execute("ALTER TABLE linkedin_oauth_states ADD COLUMN requested_scopes TEXT NOT NULL DEFAULT 'openid profile w_member_social'")
+    if "redirect_uri" not in state_columns:
+        connection.execute("ALTER TABLE linkedin_oauth_states ADD COLUMN redirect_uri TEXT NOT NULL DEFAULT ''")
+    credential_columns = {row[1] for row in connection.execute("PRAGMA table_info(linkedin_credentials)")}
+    if "member_display_name" not in credential_columns:
+        connection.execute("ALTER TABLE linkedin_credentials ADD COLUMN member_display_name TEXT")
 
 
 def _utc_now() -> str:
