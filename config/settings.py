@@ -48,6 +48,11 @@ class Settings:
     linkedin_oauth_state_ttl_seconds: int = int(os.getenv("LINKEDIN_OAUTH_STATE_TTL_SECONDS", "600"))
     linkedin_request_timeout_seconds: int = int(os.getenv("LINKEDIN_REQUEST_TIMEOUT_SECONDS", "20"))
     linkedin_publish_mode: str = os.getenv("LINKEDIN_PUBLISH_MODE", "disabled")
+    linkedin_real_publish_enabled: bool = _env_bool("LINKEDIN_REAL_PUBLISH_ENABLED", False)
+    linkedin_api_base_url: str = os.getenv("LINKEDIN_API_BASE_URL", "https://api.linkedin.com")
+    linkedin_api_version: str = os.getenv("LINKEDIN_API_VERSION", "202606")
+    linkedin_restli_protocol_version: str = os.getenv("LINKEDIN_RESTLI_PROTOCOL_VERSION", "2.0.0")
+    linkedin_default_visibility: str = os.getenv("LINKEDIN_DEFAULT_VISIBILITY", "PUBLIC")
     followup_cadence_days: int = int(os.getenv("FOLLOWUP_CADENCE_DAYS", "21"))
     database_path: str = os.getenv("DATABASE_PATH", "network_agent.db")
     generate_image_for_draft_posts: bool = _env_bool(

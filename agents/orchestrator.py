@@ -19,7 +19,7 @@ from agents.signal_intelligence_agent import SignalIntelligenceAgent
 from db.database import connect
 from db.models import ContentPost, PersonalBrandProfile, PersonalBrandProfileData, Prospect
 from config.settings import settings
-from integrations.linkedin_oauth_callback import LinkedInCredentialStore, complete_linkedin_callback
+from integrations.linkedin_oauth_callback import LinkedInCredentialStore, complete_linkedin_callback, local_linkedin_status
 from integrations.linkedin_oauth_client import LinkedInOAuthClient, LinkedInOAuthStateStore
 
 
@@ -140,12 +140,40 @@ class NetworkOrchestrator:
         try:
             connection, should_close = _coerce_connection(database)
             try:
-                return LinkedInCredentialStore(connection, settings.linkedin_token_encryption_key).status(settings.linkedin_publish_mode)
+                return local_linkedin_status(
+                    connection, client_id=settings.linkedin_client_id,
+                    client_secret=settings.linkedin_client_secret,
+                    redirect_uri=settings.linkedin_redirect_uri,
+                    scopes=settings.linkedin_oauth_scopes,
+                    encryption_key=settings.linkedin_token_encryption_key,
+                    publish_mode=settings.linkedin_publish_mode,
+                    real_publish_enabled=settings.linkedin_real_publish_enabled,
+                )
             finally:
                 if should_close:
                     connection.close()
         except Exception as exc:
             _raise_with_context("get_linkedin_connection_status", {}, exc)
+
+    def get_linkedin_access_check(self, *, database: DatabaseRef) -> dict[str, Any]:
+        return self.get_linkedin_connection_status(database=database)
+
+    def get_linkedin_publish_status(self, *, database: DatabaseRef) -> dict[str, Any]:
+        status = self.get_linkedin_connection_status(database=database)
+        connection = status.get("status", "provider_unavailable")
+        return {
+            "publishing_mode": settings.linkedin_publish_mode,
+            "real_publish_enabled": settings.linkedin_real_publish_enabled,
+            "connection_status": connection,
+            "w_member_social": status.get("active_credential_available", False),
+            "member_identity_resolved": status.get("member_identity_resolved", False),
+            "pending_confirmations": 0,
+            "mock_publications": 0,
+            "real_publications": 0,
+            "failed_requests": 0,
+            "uncertain_requests": 0,
+            "real_publishing_available": False,
+        }
 
     def disconnect_linkedin(self, *, database: DatabaseRef) -> dict[str, str]:
         try:

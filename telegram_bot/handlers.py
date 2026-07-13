@@ -100,6 +100,7 @@ async def start(update: Any, context: Any) -> None:
                 "/linkedin_connect",
                 "/linkedin_connection_status",
                 "/linkedin_access_check",
+                "/linkedin_publish_status",
                 "/linkedin_reauthorize",
                 "/linkedin_disconnect",
                 "/linkedin_oauth_history",
@@ -131,7 +132,13 @@ async def linkedin_connection_status(update: Any, context: Any) -> None:
 
 
 async def linkedin_access_check(update: Any, context: Any) -> None:
-    await linkedin_connection_status(update, context)
+    try:
+        result = _orchestrator(context).get_linkedin_access_check(database=_database(context))
+    except NetworkOrchestratorError:
+        logger.exception("LinkedIn access check failed at local_status")
+        await _reply(update, "Unable to read LinkedIn access status due to a local configuration or database error. Nothing was published.")
+        return
+    await _reply(update, _format_linkedin_access_check(result))
 
 
 async def linkedin_reauthorize(update: Any, context: Any) -> None:
@@ -150,6 +157,46 @@ async def linkedin_oauth_history(update: Any, context: Any) -> None:
         await _reply(update, "LinkedIn authorization history is unavailable.")
         return
     await _reply(update, "No LinkedIn authorization attempts yet." if not rows else "\n".join(f"{row['created_at']} | {row['status']} | scopes={row['requested_scopes']}" for row in rows))
+
+
+async def linkedin_publish_status(update: Any, context: Any) -> None:
+    """Show local publishing readiness; this never calls LinkedIn."""
+    try:
+        result = _orchestrator(context).get_linkedin_publish_status(database=_database(context))
+    except NetworkOrchestratorError:
+        logger.exception("LinkedIn publish status failed at local_status")
+        await _reply(update, "Unable to read LinkedIn publishing status due to a local configuration or database error. Nothing was published.")
+        return
+    await _reply(update, "LinkedIn publishing status\n\n"
+        f"Mode: {result['publishing_mode']}\n"
+        f"Real publishing enabled: {'yes' if result['real_publish_enabled'] else 'no'}\n"
+        f"Connection: {result['connection_status']}\n"
+        f"Permission w_member_social: {'available' if result['w_member_social'] else 'unavailable until authorization'}\n"
+        f"Pending confirmations: {result['pending_confirmations']}\n"
+        f"Real publishing available: no\nNothing can currently be published.")
+
+
+def _format_linkedin_access_check(result: dict[str, Any]) -> str:
+    missing = result.get("missing", [])
+    lines = [f"LinkedIn access check: {result['status']}"]
+    if missing:
+        lines.append("Missing:\n" + "\n".join(f"- {name}" for name in missing))
+    lines.extend([
+        f"Client ID configured: {'yes' if result['client_id_configured'] else 'no'}",
+        f"Client Secret configured: {'yes' if result['client_secret_configured'] else 'no'}",
+        f"Redirect URI valid HTTPS: {'yes' if result['redirect_uri_valid'] else 'no'}",
+        f"OAuth scopes allowlisted: {'yes' if result['scopes_allowlisted'] else 'no'}",
+        f"w_member_social requested: {'yes' if result['w_member_social_requested'] else 'no'}",
+        f"Token encryption key valid: {'yes' if result['token_encryption_key_valid'] else 'no'}",
+        f"Credential table available: {'yes' if result['credential_table_available'] else 'no'}",
+        f"Active credential: {'yes' if result['active_credential_available'] else 'no'}",
+        f"Member identity resolved: {'yes' if result['member_identity_resolved'] else 'no'}",
+        f"Publishing mode: {result['publishing_mode']}",
+        f"Real publishing enabled: {'yes' if result['real_publish_enabled'] else 'no'}",
+        "Real publishing: disabled until Phase 8G-B2",
+        "Next action: /linkedin_connect",
+    ])
+    return "\n".join(lines)
 
 
 async def briefing_now(update: Any, context: Any) -> None:

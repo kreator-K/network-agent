@@ -78,6 +78,48 @@ class LinkedInCredentialStore:
             self.connection.execute("UPDATE linkedin_credentials SET status='revoked', revoked_at=? WHERE status='active'", (datetime.now(UTC).isoformat(),))
 
 
+def local_linkedin_status(connection: sqlite3.Connection, *, client_id: str, client_secret: str,
+                          redirect_uri: str, scopes: str, encryption_key: str,
+                          publish_mode: str, real_publish_enabled: bool) -> dict[str, Any]:
+    """Return local readiness without requiring OAuth or a provider request."""
+    missing = [name for name, value in {
+        "LINKEDIN_CLIENT_ID": client_id, "LINKEDIN_CLIENT_SECRET": client_secret,
+        "LINKEDIN_REDIRECT_URI": redirect_uri, "LINKEDIN_TOKEN_ENCRYPTION_KEY": encryption_key,
+    }.items() if not value.strip()]
+    redirect_valid = redirect_uri.startswith("https://")
+    scope_valid = set(scopes.split()) == set(LINKEDIN_SCOPES)
+    key_valid = False
+    if encryption_key.strip():
+        try:
+            Fernet(encryption_key.encode("ascii"))
+            key_valid = True
+        except (ValueError, UnicodeEncodeError):
+            pass
+    table_available: bool = False
+    status: dict[str, Any]
+    try:
+        connection.execute("SELECT 1 FROM linkedin_credentials LIMIT 1").fetchone()
+        table_available = True
+        status = LinkedInCredentialStore(connection, encryption_key).status(publish_mode) if key_valid else {"status": "authorization_required", "member_identity_resolved": False, "granted_scopes": []}
+    except (sqlite3.Error, LinkedInOAuthError):
+        table_available = False
+        status = {"status": "provider_unavailable", "member_identity_resolved": False, "granted_scopes": []}
+    if missing or not redirect_valid or not scope_valid or not key_valid or not table_available:
+        connection_state = "configuration_incomplete" if missing or not redirect_valid or not scope_valid or not key_valid else "provider_unavailable"
+    else:
+        connection_state = status["status"]
+    return {
+        "status": connection_state, "missing": missing, "client_id_configured": bool(client_id.strip()),
+        "client_secret_configured": bool(client_secret.strip()), "redirect_uri_valid": redirect_valid,
+        "scopes_allowlisted": scope_valid, "w_member_social_requested": "w_member_social" in scopes.split(),
+        "token_encryption_key_valid": key_valid, "credential_table_available": table_available,
+        "active_credential_available": status.get("status") == "connected",
+        "member_identity_resolved": bool(status.get("member_identity_resolved")),
+        "publishing_mode": publish_mode, "real_publish_enabled": real_publish_enabled,
+        "real_publishing_available": False,
+    }
+
+
 def complete_linkedin_callback(
     params: Mapping[str, str], *, connection: sqlite3.Connection,
     oauth_client: LinkedInOAuthClient, credentials: LinkedInCredentialStore,
