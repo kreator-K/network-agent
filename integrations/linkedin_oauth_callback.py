@@ -86,10 +86,15 @@ def complete_linkedin_callback(
     state = params.get("state", "")
     if params.get("error") or not state or not params.get("code"):
         raise LinkedInOAuthError("LinkedIn authorization failed or expired.")
-    state_row = LinkedInOAuthStateStore(connection).consume(state)
-    if state_row["redirect_uri"] and state_row["redirect_uri"] != oauth_client.redirect_uri:
-        raise LinkedInOAuthError("LinkedIn callback redirect mismatch.")
-    tokens = oauth_client.exchange_code(params["code"], persist_tokens=False)
-    identity = oauth_client.fetch_userinfo(tokens.access_token)
-    result = credentials.save(tokens, identity)
-    return {"status": "connected", "state_id": state_row["id"], **result, "browser_html": browser_result(True)}
+    states = LinkedInOAuthStateStore(connection)
+    state_row = states.consume(state)
+    try:
+        if state_row["redirect_uri"] and state_row["redirect_uri"] != oauth_client.redirect_uri:
+            raise LinkedInOAuthError("LinkedIn callback redirect mismatch.")
+        tokens = oauth_client.exchange_code(params["code"], persist_tokens=False)
+        identity = oauth_client.fetch_userinfo(tokens.access_token)
+        result = credentials.save(tokens, identity)
+        return {"status": "connected", "state_id": state_row["id"], **result, "browser_html": browser_result(True)}
+    except Exception:
+        states.mark_failed(state_row["id"])
+        raise

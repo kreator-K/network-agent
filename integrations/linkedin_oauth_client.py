@@ -112,6 +112,13 @@ class LinkedInOAuthStateStore:
         self.connection.commit()
         return result.rowcount
 
+    def mark_failed(self, state_id: int) -> None:
+        self.connection.execute(
+            "UPDATE linkedin_oauth_states SET status='failed' WHERE id=? AND status='consumed'",
+            (state_id,),
+        )
+        self.connection.commit()
+
     def expire_stale(self) -> int:
         result = self.connection.execute(
             "UPDATE linkedin_oauth_states SET status='expired' WHERE status='pending' AND expires_at <= ?",
