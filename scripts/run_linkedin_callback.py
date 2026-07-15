@@ -6,7 +6,11 @@ LINKEDIN_REDIRECT_URI.
 """
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import sys
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agents.orchestrator import NetworkOrchestrator
 from config.settings import settings
@@ -14,7 +18,8 @@ from config.settings import settings
 
 class CallbackHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
-        if self.path.split("?", 1)[0] != "/oauth/linkedin/callback":
+        configured_path = urlparse(settings.linkedin_redirect_uri).path
+        if self.path.split("?", 1)[0] != configured_path:
             self.send_error(404)
             return
         params = {key: values[0] for key, values in parse_qs(urlparse(self.path).query).items() if values}
