@@ -21,6 +21,7 @@ from db.models import ContentPost, PersonalBrandProfile, PersonalBrandProfileDat
 from config.settings import settings
 from integrations.linkedin_oauth_callback import LinkedInCredentialStore, complete_linkedin_callback, local_linkedin_status
 from integrations.linkedin_oauth_client import LinkedInOAuthClient, LinkedInOAuthStateStore
+from integrations.linkedin_publishing_gateway import LinkedInPublishingGateway
 
 
 DatabaseRef = str | Path
@@ -75,6 +76,7 @@ class NetworkOrchestrator:
         content_inspiration_agent: Any | None = None,
         refinement_loop_agent: Any | None = None,
         signal_intelligence_agent: Any | None = None,
+        linkedin_publishing_gateway: Any | None = None,
         tracker_factory: TrackerFactory | None = None,
     ) -> None:
         """Create an orchestrator with injectable agents for tests."""
@@ -89,6 +91,7 @@ class NetworkOrchestrator:
         )
         self.refinement_loop_agent = refinement_loop_agent or RefinementLoopAgent()
         self.signal_intelligence_agent = signal_intelligence_agent or SignalIntelligenceAgent()
+        self.linkedin_publishing_gateway = linkedin_publishing_gateway or LinkedInPublishingGateway()
         self.tracker_factory = tracker_factory or RelationshipTrackerAgent
 
     def handle(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -161,19 +164,92 @@ class NetworkOrchestrator:
     def get_linkedin_publish_status(self, *, database: DatabaseRef) -> dict[str, Any]:
         status = self.get_linkedin_connection_status(database=database)
         connection = status.get("status", "provider_unavailable")
+        db, should_close = _coerce_connection(database)
+        try:
+            counts = {
+                row["status"]: row["count"]
+                for row in db.execute(
+                    "SELECT status, COUNT(*) AS count FROM linkedin_publish_requests GROUP BY status"
+                ).fetchall()
+            }
+        finally:
+            if should_close:
+                db.close()
         return {
             "publishing_mode": settings.linkedin_publish_mode,
             "real_publish_enabled": settings.linkedin_real_publish_enabled,
             "connection_status": connection,
-            "w_member_social": status.get("active_credential_available", False),
+            "w_member_social": "w_member_social" in status.get("granted_scopes", []),
             "member_identity_resolved": status.get("member_identity_resolved", False),
-            "pending_confirmations": 0,
-            "mock_publications": 0,
-            "real_publications": 0,
-            "failed_requests": 0,
-            "uncertain_requests": 0,
-            "real_publishing_available": False,
+            "pending_confirmations": counts.get("awaiting_confirmation", 0),
+            "mock_publications": counts.get("published_mock", 0),
+            "real_publications": counts.get("published_linkedin", 0),
+            "failed_requests": sum(counts.get(item, 0) for item in ("publish_failed", "upload_failed", "image_upload_failed", "processing_failed")),
+            "uncertain_requests": sum(counts.get(item, 0) for item in ("publish_uncertain", "upload_uncertain", "image_upload_uncertain")),
+            "real_publishing_available": connection == "connected" and settings.linkedin_publish_mode == "real" and settings.linkedin_real_publish_enabled,
         }
+
+    def prepare_linkedin_publish(self, post_id: int, *, database: DatabaseRef) -> dict[str, Any]:
+        """Freeze one approved package for a separate final confirmation."""
+        try:
+            return self.linkedin_publishing_gateway.prepare_publish(post_id, database)
+        except Exception as exc:
+            _raise_with_context("prepare_linkedin_publish", {"post_id": post_id}, exc)
+
+    def confirm_linkedin_publish(self, request_id: int, *, database: DatabaseRef) -> dict[str, Any]:
+        """Execute one already-frozen request after explicit confirmation."""
+        try:
+            return self.linkedin_publishing_gateway.confirm_publish(request_id, database)
+        except Exception as exc:
+            _raise_with_context("confirm_linkedin_publish", {"request_id": request_id}, exc)
+
+    def cancel_linkedin_publish(self, request_id: int, *, database: DatabaseRef) -> dict[str, Any]:
+        try:
+            return self.linkedin_publishing_gateway.cancel_publish(request_id, database)
+        except Exception as exc:
+            _raise_with_context("cancel_linkedin_publish", {"request_id": request_id}, exc)
+
+    def get_linkedin_publish_request(self, request_id: int, *, database: DatabaseRef) -> dict[str, Any]:
+        try:
+            return self.linkedin_publishing_gateway.get_request(request_id, database)
+        except Exception as exc:
+            _raise_with_context("get_linkedin_publish_request", {"request_id": request_id}, exc)
+
+    def list_linkedin_publish_history(self, *, database: DatabaseRef, limit: int = 20) -> list[dict[str, Any]]:
+        try:
+            return self.linkedin_publishing_gateway.history(database, limit)
+        except Exception as exc:
+            _raise_with_context("list_linkedin_publish_history", {"limit": limit}, exc)
+
+    def resolve_linkedin_publish_uncertain(self, request_id: int, posted: bool, *, database: DatabaseRef) -> dict[str, Any]:
+        try:
+            return self.linkedin_publishing_gateway.resolve_uncertain(request_id, posted, database)
+        except Exception as exc:
+            _raise_with_context("resolve_linkedin_publish_uncertain", {"request_id": request_id}, exc)
+
+    def get_linkedin_publish_diagnostics(self, *, database: DatabaseRef) -> dict[str, Any]:
+        """Return read-only local publishing diagnostics without provider calls."""
+        try:
+            result = self.linkedin_publishing_gateway.diagnostics(database)
+            connection = self.get_linkedin_connection_status(database=database)
+            result.update(
+                {
+                    "connection_status": connection.get("status"),
+                    "granted_scopes": connection.get("granted_scopes", []),
+                    "member_identity_resolved": connection.get("member_identity_resolved", False),
+                }
+            )
+            return result
+        except Exception as exc:
+            _raise_with_context("get_linkedin_publish_diagnostics", {}, exc)
+
+    def reconcile_linkedin_publish_requests(self, *, database: DatabaseRef) -> dict[str, Any]:
+        """Mark interrupted writes uncertain; never contact LinkedIn."""
+        try:
+            count = self.linkedin_publishing_gateway.reconcile_stale_in_progress(database)
+            return {"reconciled": count, "provider_calls": 0}
+        except Exception as exc:
+            _raise_with_context("reconcile_linkedin_publish_requests", {}, exc)
 
     def disconnect_linkedin(self, *, database: DatabaseRef) -> dict[str, str]:
         try:

@@ -2,6 +2,7 @@
 
 import json
 import hashlib
+import re
 import sqlite3
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -39,6 +40,7 @@ def initialize_database(
     """Initialize tables and seed durable human-controlled configuration."""
     schema = Path(schema_path).read_text(encoding="utf-8")
     with connect(database_path) as connection:
+        _prepare_linkedin_publish_legacy_migration(connection)
         connection.executescript(schema)
         _migrate_interactions_connection_request_type(connection)
         _migrate_interactions_lifecycle_columns(connection)
@@ -49,6 +51,7 @@ def initialize_database(
         _migrate_calendar_block_lifecycle_columns(connection)
         _migrate_signal_scoring_columns(connection)
         _migrate_linkedin_oauth_columns(connection)
+        _migrate_linkedin_publish_columns(connection)
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_signals_score ON signals(total_score DESC)"
         )
@@ -882,6 +885,158 @@ def _migrate_linkedin_oauth_columns(connection: sqlite3.Connection) -> None:
     credential_columns = {row[1] for row in connection.execute("PRAGMA table_info(linkedin_credentials)")}
     if "member_display_name" not in credential_columns:
         connection.execute("ALTER TABLE linkedin_credentials ADD COLUMN member_display_name TEXT")
+    _canonicalize_linkedin_granted_scopes(connection)
+
+
+def _canonicalize_linkedin_granted_scopes(connection: sqlite3.Connection) -> None:
+    """Normalize legacy scope text to the durable JSON-list representation."""
+    required = ("openid", "profile", "w_member_social")
+    rows = connection.execute(
+        "SELECT id, granted_scopes FROM linkedin_credentials"
+    ).fetchall()
+    for row in rows:
+        raw = row[1]
+        try:
+            parsed = json.loads(raw) if raw else []
+        except json.JSONDecodeError:
+            parsed = raw or ""
+        if isinstance(parsed, list):
+            scopes = {str(item).strip() for item in parsed if str(item).strip()}
+        elif isinstance(parsed, str):
+            scopes = {part for part in re.split(r"[\s,]+", parsed) if part}
+        else:
+            scopes = set()
+        ordered = [scope for scope in required if scope in scopes]
+        ordered.extend(sorted(scopes.difference(required)))
+        canonical = json.dumps(ordered, separators=(",", ":"))
+        if raw != canonical:
+            connection.execute(
+                "UPDATE linkedin_credentials SET granted_scopes=? WHERE id=?",
+                (canonical, row[0]),
+            )
+
+
+def _migrate_linkedin_publish_columns(connection: sqlite3.Connection) -> None:
+    """Add production-hardening fields to pre-certification publish ledgers."""
+    columns = _column_names(connection, "linkedin_publish_requests")
+    if not columns:
+        return
+    if "confirmation_attempts" not in columns:
+        connection.execute(
+            "ALTER TABLE linkedin_publish_requests ADD COLUMN confirmation_attempts INTEGER NOT NULL DEFAULT 0"
+        )
+    if "last_confirmation_attempt_at" not in columns:
+        connection.execute(
+            "ALTER TABLE linkedin_publish_requests ADD COLUMN last_confirmation_attempt_at TEXT"
+        )
+    _import_legacy_linkedin_publish_requests(connection)
+
+
+def _prepare_linkedin_publish_legacy_migration(connection: sqlite3.Connection) -> None:
+    """Archive the Phase 8G-A ledger before the certified schema is applied."""
+    columns = _column_names(connection, "linkedin_publish_requests")
+    if not columns or "publish_format" in columns:
+        return
+    legacy_table = "linkedin_publish_requests_legacy_8ga"
+    if _column_names(connection, legacy_table):
+        raise sqlite3.OperationalError("A legacy LinkedIn publish archive already exists.")
+    connection.execute(
+        f"ALTER TABLE linkedin_publish_requests RENAME TO {legacy_table}"
+    )
+    connection.execute("DROP INDEX IF EXISTS idx_linkedin_publish_requests_status")
+    connection.execute("DROP INDEX IF EXISTS idx_linkedin_publish_requests_post")
+
+
+def _import_legacy_linkedin_publish_requests(connection: sqlite3.Connection) -> None:
+    """Import legacy requests as terminal audit records, never reusable previews."""
+    legacy_table = "linkedin_publish_requests_legacy_8ga"
+    if not _column_names(connection, legacy_table):
+        return
+    credential = connection.execute(
+        """SELECT id, oidc_subject FROM linkedin_credentials
+           WHERE oidc_subject IS NOT NULL
+           ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, id DESC LIMIT 1"""
+    ).fetchone()
+    if credential is None:
+        return
+    status_map = {
+        "mock_published": "published_mock",
+        "cancelled": "cancelled",
+        "expired": "expired",
+        "preview_ready": "expired",
+        "awaiting_confirmation": "expired",
+        "blocked_disabled": "publish_failed",
+        "failed": "publish_failed",
+        "real_publish_not_implemented": "publish_failed",
+    }
+    rows = connection.execute(
+        f"SELECT * FROM {legacy_table} ORDER BY id"
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        publish_format = str(
+            payload.get("format") or payload.get("publish_format") or "text"
+        )
+        if publish_format not in {
+            "text", "single_image", "multi_image", "video", "document", "article", "poll"
+        }:
+            publish_format = "text"
+        status = status_map.get(str(row["status"]), "publish_failed")
+        author = f"urn:li:person:{credential['oidc_subject']}"
+        provider_post_id = row["external_post_id"]
+        now = _utc_now()
+        connection.execute(
+            """INSERT OR IGNORE INTO linkedin_publish_requests (
+                id, content_post_id, package_version, publish_format, status,
+                payload_json, payload_hash, asset_manifest_json, idempotency_key,
+                credential_id, author_urn, visibility, api_version,
+                provider_post_id, safe_error_code, safe_error_summary,
+                expires_at, confirmed_at, completed_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                row["id"], row["content_post_id"], row["package_version"], publish_format,
+                status, payload_json, hashlib.sha256(payload_json.encode()).hexdigest(),
+                row["idempotency_key"], credential["id"], author,
+                str(payload.get("visibility") or "PUBLIC"),
+                str(payload.get("api_version") or "202606"), provider_post_id,
+                row["error_code"] or "legacy_migration",
+                row["error_summary"] or "Migrated from the Phase 8G-A request ledger.",
+                row["expires_at"], row["confirmed_at"], row["completed_at"],
+                row["created_at"], now,
+            ),
+        )
+        migrated = connection.execute(
+            "SELECT id FROM linkedin_publish_requests WHERE idempotency_key=?",
+            (row["idempotency_key"],),
+        ).fetchone()
+        if migrated is not None:
+            connection.execute(
+                """INSERT INTO linkedin_publish_events
+                   (request_id, event_type, stage, safe_metadata_json, created_at)
+                   SELECT ?, 'legacy_migrated', 'migration', ?, ?
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM linkedin_publish_events
+                       WHERE request_id=? AND event_type='legacy_migrated'
+                   )""",
+                (
+                    migrated["id"],
+                    json.dumps(
+                        {
+                            "legacy_status": row["status"],
+                            "external_url_present": bool(row["external_post_url"]),
+                        },
+                        sort_keys=True,
+                    ),
+                    now,
+                    migrated["id"],
+                ),
+            )
 
 
 def _utc_now() -> str:

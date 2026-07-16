@@ -23,8 +23,24 @@ The existing disabled/mock publishing boundary and Telegram double-confirmation
 controls remain in place. No scraping, feed reading, messaging, connection
 requests, InMail, or autonomous publishing is permitted.
 
-## Phase 8G-B2
+## Publishing Boundary
 
-B2 is reserved for real text-only posting through an approved
-`LinkedInPublishingGateway`. It has not started and must retain explicit human
-approval and both confirmation controls.
+`NetworkOrchestrator` coordinates `LinkedInPublishingGateway`, and only
+`LinkedInApiClient` performs official LinkedIn HTTP requests. Every format uses
+an approved content package, frozen preview, deterministic payload and asset
+hashes, expiring request ID, and separate `/confirm_publish <request_id>`.
+
+Disabled mode and a disabled real-publish kill switch make no provider request.
+Mock mode records a deterministic local result and never contacts LinkedIn.
+Real mode requires both controls and never retries a provider write
+automatically. Interrupted or ambiguous writes become uncertain and block
+replay until the operator resolves them.
+
+Startup reconciliation never resumes a write. It marks interrupted work
+uncertain and records an append-only audit event. Manual resolution records the
+operator's decision separately and does not rewrite the original uncertainty.
+
+Phase 8G-B2 supports text and one approved image. Phase 8G-B3 adds multi-image,
+video, document, article, and poll packages through the same boundary. No
+workflow may scrape LinkedIn, send outreach, schedule publishing, infer consent,
+or publish from a briefing, model, scheduler, prospect, or outreach workflow.

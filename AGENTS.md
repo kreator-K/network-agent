@@ -15,17 +15,17 @@ This is not an automation/spam tool. No agent may autonomously send a LinkedIn c
 
 - No agent may submit a LinkedIn connection request or direct message automatically. LinkedIn's public developer API does not support programmatic connection requests, connection-request notes, regular direct messages, or InMail for individual developer accounts. Those capabilities are restricted to partner-only Sales Navigator/Talent Solutions APIs.
 - LinkedIn outreach output is permanently draft-only in MVP scope. The user manually copies and sends drafted outreach messages in the LinkedIn app.
-- LinkedIn publishing may be automated only through `LinkedInPublishAgent`, only for approved posts, and only after explicit human approval through Telegram.
+- LinkedIn publishing may be automated only through `LinkedInPublishingGateway` and `LinkedInApiClient`, only for approved posts, and only after a separate explicit Telegram confirmation of a frozen request.
 - No agent may scrape or programmatically search LinkedIn. Prospect data is manually provided by the user (name, profile URL, notes) and enriched by agents - never discovered via scraping.
 - No agent may fabricate shared connections, experiences, skills, or credentials the user has not actually stated.
 - Follow-up cadence defaults to `FOLLOWUP_CADENCE_DAYS=21`, stored as a configurable value in the SQLite `core_intent` table and loaded from human-edited `core_intent.json`. Agents must read the configured value, not hardcode cadence logic.
 - Calendar blocking only triggers on explicit user confirmation (e.g., `/meeting_confirmed`), never on inferred/parsed natural language intent from a reply.
 - All model calls must go through `ModelOrchestrationAgent`. No agent calls an LLM/VLM/image provider directly.
 - `NetworkOrchestrator` coordinates all specialist agents. Telegram bot handlers call the orchestrator, never agents directly.
-- `LinkedInPublishAgent` is the only module allowed to call the LinkedIn API. It will be built fresh, has no opinion on content quality, and only authenticates and posts what it is given after human approval.
+- `LinkedInApiClient` is the only module allowed to make LinkedIn HTTP requests. `LinkedInPublishingGateway` owns frozen previews, durable confirmation, idempotency, and audit state; it has no content-generation logic.
 - LinkedIn uses the official authorization-code OAuth flow and REST APIs directly. LinkedIn MCP is prohibited: do not configure, call, create, or maintain a LinkedIn MCP server.
-- Phase 8G-B1 is OAuth foundation only. It requests only `openid`, `profile`, and `w_member_social`; tokens must be encrypted before storage, and `LINKEDIN_PUBLISH_MODE=disabled` must remain in force.
-- Phase 8G-B2 is reserved for approved text-only posting and must not begin automatically. Authentication alone must never enable publishing.
+- Phase 8G-B1 requests only `openid`, `profile`, and `w_member_social`; tokens are encrypted before storage.
+- Phase 8G-B2 supports explicitly confirmed text and single-image member posts. Phase 8G-B3 adds richer member formats through the same request lifecycle. Authentication or package approval alone never enables publishing.
 
 ## Agent Architecture
 
@@ -42,8 +42,9 @@ This is not an automation/spam tool. No agent may autonomously send a LinkedIn c
 
 Supporting integration modules (not decision-making agents):
 
-9. `LinkedInPublishAgent` - thin wrapper around LinkedIn's Share/Posts API, built fresh once developer app approval is obtained. Only called after explicit human approval in Telegram. Has no content-generation logic.
-10. `public_signal_gateway` - thin HTTP and RSS/Atom parsing boundary for explicitly approved public sources. It validates URLs and network targets but does not persist, score, or generate content.
+9. `LinkedInPublishingGateway` - durable frozen-preview, confirmation, idempotency, and uncertainty boundary. It delegates provider HTTP only to `LinkedInApiClient` and has no content-generation logic.
+10. `LinkedInApiClient` - the sole official LinkedIn REST HTTP boundary for allowlisted Posts, Images, Videos, and Documents operations. It never reads business tables or decides approval.
+11. `public_signal_gateway` - thin HTTP and RSS/Atom parsing boundary for explicitly approved public sources. It validates URLs and network targets but does not persist, score, or generate content.
 
 ## Refinement Loop Rules
 
@@ -69,7 +70,7 @@ Telegram bot is the primary interface. All approval, editing, and confirmation f
 - Telegram profile commands call `NetworkOrchestrator`; they never access profile tables directly.
 - Keep model orchestration separate from bot handlers and from business logic.
 - Content opportunities are not post drafts. `ContentInspirationAgent` remains the future owner of approved post packages; personal-brand facts and scoring configuration remain human-controlled.
-- Approval for later posting is an internal review state only. No Phase 8D content package may be published or sent to LinkedIn.
+- Approval for later posting remains internal. Publication additionally requires an unexpired frozen request and explicit `/confirm_publish <request_id>`; freeform consent is invalid.
 - Phase 8E adds no specialist agent. The briefing runner is operational infrastructure that invokes `NetworkOrchestrator`; it may prepare review work but cannot approve, publish, send outreach, or alter profiles and scoring weights.
 - `public_signal_gateway` is the only public-feed HTTP boundary. It validates RSS/Atom URLs, blocks LinkedIn and private-network targets, and does not write SQLite or call models.
 - Use mock mode by default for all model/image calls during development (`MOCK_MODE=true`), same pattern as `ads-agent`.
@@ -82,7 +83,10 @@ Telegram bot is the primary interface. All approval, editing, and confirmation f
 - `CalendarAgent` needs tests proving it never triggers without explicit `/meeting_confirmed` command.
 - `OutreachDraftAgent` and `ContentInspirationAgent` need tests proving no fabricated claims appear in output (no invented shared connections, skills, or credentials).
 - Follow-up cadence logic needs tests proving it reads `FOLLOWUP_CADENCE_DAYS` from `core_intent` and never suggests contact more frequently than the configured default of 21 days.
-- `LinkedInPublishAgent` needs tests proving it never fires without an explicit approval flag set to true.
+- LinkedIn publishing tests must prove disabled/mock network isolation, exact frozen payloads and asset hashes, one-time confirmation, replay prevention, no automatic write retries, secret redaction, and durable uncertainty.
+- Rich LinkedIn formats must use the same durable publication request path. Media URNs may come only from provider initialization responses, article URLs must pass public HTTPS checks, and uncertain processing must never trigger polling or an automatic retry.
+- Startup reconciliation may only mark interrupted LinkedIn writes uncertain. It must never resume, repeat, or infer success for a provider write.
+- Manual uncertainty resolution is append-only and must preserve the original request state and provider uncertainty evidence.
 
 ## QA Edge Cases
 

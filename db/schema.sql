@@ -495,3 +495,114 @@ CREATE TABLE IF NOT EXISTS linkedin_credentials (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_linkedin_credentials_active
 ON linkedin_credentials(status) WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS linkedin_publish_requests (
+    id INTEGER PRIMARY KEY,
+    content_post_id INTEGER NOT NULL REFERENCES content_posts(id) ON DELETE RESTRICT,
+    package_version INTEGER NOT NULL,
+    publish_format TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'awaiting_confirmation',
+    payload_json TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    asset_manifest_json TEXT NOT NULL DEFAULT '[]',
+    idempotency_key TEXT NOT NULL UNIQUE,
+    credential_id INTEGER NOT NULL REFERENCES linkedin_credentials(id) ON DELETE RESTRICT,
+    author_urn TEXT NOT NULL,
+    visibility TEXT NOT NULL,
+    api_version TEXT NOT NULL,
+    provider_asset_urns_json TEXT NOT NULL DEFAULT '[]',
+    provider_post_id TEXT,
+    safe_error_code TEXT,
+    safe_error_summary TEXT,
+    confirmation_attempts INTEGER NOT NULL DEFAULT 0,
+    last_confirmation_attempt_at TEXT,
+    expires_at TEXT NOT NULL,
+    confirmed_at TEXT,
+    completed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (package_version >= 1),
+    CHECK (publish_format IN ('text', 'single_image', 'multi_image', 'video', 'document', 'article', 'poll')),
+    CHECK (visibility IN ('PUBLIC', 'CONNECTIONS')),
+    CHECK (status IN (
+        'awaiting_confirmation', 'publishing_in_progress',
+        'image_upload_initializing', 'image_upload_initialized',
+        'image_upload_in_progress', 'image_uploaded',
+        'upload_initializing', 'upload_in_progress', 'upload_processing',
+        'assets_uploaded', 'published_linkedin', 'published_mock',
+        'publish_failed', 'publish_uncertain', 'image_upload_failed',
+        'image_upload_uncertain', 'upload_failed', 'upload_uncertain',
+        'processing_failed', 'processing_unknown', 'cancelled', 'expired', 'resolved_not_posted'
+    ))
+);
+
+CREATE INDEX IF NOT EXISTS idx_linkedin_publish_requests_post
+ON linkedin_publish_requests(content_post_id, package_version);
+CREATE INDEX IF NOT EXISTS idx_linkedin_publish_requests_status
+ON linkedin_publish_requests(status, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_linkedin_publish_provider_post_id
+ON linkedin_publish_requests(provider_post_id) WHERE provider_post_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_linkedin_publish_blocking_package_version
+ON linkedin_publish_requests(content_post_id, package_version)
+WHERE status IN (
+    'awaiting_confirmation', 'publishing_in_progress',
+    'image_upload_initializing', 'image_upload_initialized',
+    'image_upload_in_progress', 'image_uploaded', 'upload_initializing',
+    'upload_in_progress', 'upload_processing', 'assets_uploaded',
+    'publish_uncertain', 'image_upload_uncertain', 'upload_uncertain',
+    'processing_unknown', 'published_linkedin', 'published_mock'
+);
+
+CREATE TABLE IF NOT EXISTS linkedin_publish_events (
+    id INTEGER PRIMARY KEY,
+    request_id INTEGER NOT NULL REFERENCES linkedin_publish_requests(id) ON DELETE RESTRICT,
+    event_type TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    safe_metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_linkedin_publish_events_request
+ON linkedin_publish_events(request_id, created_at);
+
+CREATE TABLE IF NOT EXISTS linkedin_publish_resolutions (
+    id INTEGER PRIMARY KEY,
+    request_id INTEGER NOT NULL UNIQUE REFERENCES linkedin_publish_requests(id) ON DELETE RESTRICT,
+    decision TEXT NOT NULL,
+    provider_post_id TEXT,
+    note TEXT,
+    resolved_at TEXT NOT NULL,
+    CHECK (decision IN ('posted', 'not_posted'))
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_linkedin_publish_terminal_immutable
+BEFORE UPDATE ON linkedin_publish_requests
+WHEN OLD.status IN ('published_linkedin', 'published_mock', 'publish_failed',
+    'publish_uncertain', 'image_upload_failed', 'image_upload_uncertain',
+    'upload_failed', 'upload_uncertain', 'processing_failed',
+    'processing_unknown', 'cancelled', 'expired', 'resolved_not_posted')
+BEGIN
+    SELECT RAISE(ABORT, 'terminal LinkedIn publish request is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_linkedin_publish_no_delete
+BEFORE DELETE ON linkedin_publish_requests
+BEGIN
+    SELECT RAISE(ABORT, 'LinkedIn publish audit records cannot be deleted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_linkedin_publish_events_no_update
+BEFORE UPDATE ON linkedin_publish_events BEGIN
+    SELECT RAISE(ABORT, 'LinkedIn publish events are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_linkedin_publish_events_no_delete
+BEFORE DELETE ON linkedin_publish_events BEGIN
+    SELECT RAISE(ABORT, 'LinkedIn publish events are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_linkedin_publish_resolutions_no_update
+BEFORE UPDATE ON linkedin_publish_resolutions BEGIN
+    SELECT RAISE(ABORT, 'LinkedIn publish resolutions are append-only');
+END;
+CREATE TRIGGER IF NOT EXISTS trg_linkedin_publish_resolutions_no_delete
+BEFORE DELETE ON linkedin_publish_resolutions BEGIN
+    SELECT RAISE(ABORT, 'LinkedIn publish resolutions are append-only');
+END;

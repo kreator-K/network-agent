@@ -8,8 +8,12 @@ import pytest
 from cryptography.fernet import Fernet
 
 from db.database import connect, initialize_database
-from integrations.linkedin_oauth_callback import LinkedInCredentialStore, complete_linkedin_callback
-from integrations.linkedin_oauth_client import LinkedInOAuthClient, LinkedInOAuthError, LinkedInOAuthStateStore
+from integrations.linkedin_oauth_callback import (
+    LinkedInCredentialStore,
+    complete_linkedin_callback,
+    local_linkedin_status,
+)
+from integrations.linkedin_oauth_client import LinkedInOAuthClient, LinkedInOAuthError, LinkedInOAuthStateStore, LinkedInTokenSet
 
 
 KEY = Fernet.generate_key().decode()
@@ -58,3 +62,73 @@ def test_callback_browser_failure_is_generic(tmp_path: Path) -> None:
     connection = setup_db(tmp_path)
     with pytest.raises(LinkedInOAuthError):
         complete_linkedin_callback({"error": "access_denied", "state": "raw"}, connection=connection, oauth_client=client(tmp_path), credentials=LinkedInCredentialStore(connection, KEY))
+
+
+def test_credential_scopes_are_persisted_as_canonical_json_list(tmp_path: Path) -> None:
+    connection = setup_db(tmp_path)
+    store = LinkedInCredentialStore(connection, KEY)
+    store.save(
+        LinkedInTokenSet("access", None, 3600, "w_member_social openid profile"),
+        {"sub": "member-1"},
+    )
+    row = connection.execute("SELECT granted_scopes FROM linkedin_credentials").fetchone()
+    assert row[0] == '["openid","profile","w_member_social"]'
+
+
+def test_status_reads_legacy_scope_text_and_reports_connected(tmp_path: Path) -> None:
+    connection = setup_db(tmp_path)
+    store = LinkedInCredentialStore(connection, KEY)
+    store.save(LinkedInTokenSet("access", None, 3600, "openid profile w_member_social"), {"sub": "member-1"})
+    connection.execute("UPDATE linkedin_credentials SET granted_scopes=?", ("openid profile w_member_social",))
+    result = store.status("disabled")
+    assert result["status"] == "connected"
+    assert result["granted_scopes"] == ["openid", "profile", "w_member_social"]
+
+
+def test_status_reports_missing_permissions_without_connecting(tmp_path: Path) -> None:
+    connection = setup_db(tmp_path)
+    store = LinkedInCredentialStore(connection, KEY)
+    store.save(LinkedInTokenSet("access", None, 3600, "openid profile w_member_social"), {"sub": "member-1"})
+    connection.execute("UPDATE linkedin_credentials SET granted_scopes=?", ('["openid","profile"]',))
+    result = store.status("disabled")
+    assert result["status"] == "permission_missing"
+    assert result["missing_scopes"] == ["w_member_social"]
+
+
+def test_database_initialization_canonicalizes_legacy_scopes(tmp_path: Path) -> None:
+    connection = setup_db(tmp_path)
+    store = LinkedInCredentialStore(connection, KEY)
+    store.save(LinkedInTokenSet("access", None, 3600, "openid profile w_member_social"), {"sub": "member-1"})
+    connection.execute("UPDATE linkedin_credentials SET granted_scopes=?", ("openid profile w_member_social",))
+    connection.commit()
+    initialize_database(tmp_path / "oauth.db")
+    row = connection.execute("SELECT granted_scopes FROM linkedin_credentials").fetchone()
+    assert row[0] == '["openid","profile","w_member_social"]'
+
+
+def test_local_status_preserves_granted_scopes_after_restart(tmp_path: Path) -> None:
+    connection = setup_db(tmp_path)
+    LinkedInCredentialStore(connection, KEY).save(
+        LinkedInTokenSet("access", None, 3600, "openid profile w_member_social"),
+        {"sub": "member-1"},
+    )
+    connection.close()
+
+    restarted = connect(tmp_path / "oauth.db")
+    result = local_linkedin_status(
+        restarted,
+        client_id="client",
+        client_secret="secret",
+        redirect_uri="https://example.test/oauth/linkedin/callback",
+        scopes="openid profile w_member_social",
+        encryption_key=KEY,
+        publish_mode="disabled",
+        real_publish_enabled=False,
+    )
+    restarted.close()
+
+    assert result["status"] == "connected"
+    assert result["granted_scopes"] == ["openid", "profile", "w_member_social"]
+    assert result["missing_scopes"] == []
+    assert result["member_identity_resolved"] is True
+    assert result["real_publishing_available"] is False

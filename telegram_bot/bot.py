@@ -131,9 +131,16 @@ def build_bot() -> Application:
     application.add_handler(CommandHandler("linkedin_connection_status", handlers.linkedin_connection_status))
     application.add_handler(CommandHandler("linkedin_access_check", handlers.linkedin_access_check))
     application.add_handler(CommandHandler("linkedin_publish_status", handlers.linkedin_publish_status))
+    application.add_handler(CommandHandler("linkedin_publish_diagnostics", handlers.linkedin_publish_diagnostics))
     application.add_handler(CommandHandler("linkedin_reauthorize", handlers.linkedin_reauthorize))
     application.add_handler(CommandHandler("linkedin_disconnect", handlers.linkedin_disconnect))
     application.add_handler(CommandHandler("linkedin_oauth_history", handlers.linkedin_oauth_history))
+    application.add_handler(CommandHandler("prepare_publish", handlers.prepare_publish))
+    application.add_handler(CommandHandler("confirm_publish", handlers.confirm_publish))
+    application.add_handler(CommandHandler("cancel_publish", handlers.cancel_publish))
+    application.add_handler(CommandHandler("publish_request", handlers.publish_request))
+    application.add_handler(CommandHandler("publish_history", handlers.publish_history))
+    application.add_handler(CommandHandler("resolve_publish_uncertain", handlers.resolve_publish_uncertain))
     logger.info("Registered LinkedIn status handlers: linkedin_access_check, linkedin_connection_status, linkedin_publish_status")
     application.add_handler(CallbackQueryHandler(handlers.button_callback))
     application.add_handler(MessageHandler(filters.PHOTO, handlers.photo_reply))
@@ -143,6 +150,21 @@ def build_bot() -> Application:
 
 async def _post_init(application: Application) -> None:
     """Start one persistent optional calendar runtime for the bot lifecycle."""
+    orchestrator = application.bot_data["orchestrator"]
+    try:
+        report = orchestrator.reconcile_linkedin_publish_requests(
+            database=application.bot_data["database_path"]
+        )
+        application.bot_data["linkedin_publish_reconciliation"] = report
+        logger.info(
+            "LinkedIn publish startup reconciliation completed: count=%s provider_calls=0",
+            report["reconciled"],
+        )
+    except Exception as exc:
+        logger.warning(
+            "LinkedIn publish startup reconciliation unavailable: %s",
+            type(exc).__name__,
+        )
     runtime = GoogleCalendarMCPRuntime()
     application.bot_data["calendar_runtime"] = runtime
     try:

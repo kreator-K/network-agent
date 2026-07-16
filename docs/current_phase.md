@@ -14,9 +14,9 @@ Telegram commands: `/discover_candidates`, `/prospect_candidates`, and `/approve
 
 Tests executed: full pytest suite, mypy, and ruff.
 
-Acceptance: source attribution, explicit approval before CRM insertion, clean duplicate/invalid status rejection, and existing manual prospect workflows remain intact. Phase 8G remains not started.
+Acceptance: source attribution, explicit approval before CRM insertion, clean duplicate/invalid status rejection, and existing manual prospect workflows remain intact.
 
-Phase 8G-B1 — LinkedIn OAuth Foundation: in progress
+Phase 8G-B1 — LinkedIn OAuth Foundation: completed
 
 LinkedIn integration decision: use LinkedIn's official OAuth and REST APIs
 directly. LinkedIn MCP is explicitly out of scope and no LinkedIn MCP server
@@ -24,4 +24,12 @@ is maintained. B1 authenticates only with `openid`, `profile`, and
 `w_member_social`; tokens are encrypted before storage. Publishing remains
 `LINKEDIN_PUBLISH_MODE=disabled` and successful authentication cannot publish.
 
-Phase 8G-B2 — real text-only posting: not_started. Do not begin automatically.
+Phase 8G-B2 — Real Text and Single-Image LinkedIn Member Posting: completed through automated and mocked acceptance. Live publication was not executed because it requires explicit package-specific user confirmation.
+
+Phase 8G-B3 — Richer LinkedIn Content Formats: completed through automated and mocked acceptance. Multi-image, video, document, article, and poll formats reuse the same frozen preview, request ID, confirmation, idempotency, uncertainty, and audit boundary.
+
+Phase 8G-B4 — Production Publishing Hardening: completed through automated, disabled-mode, mock-mode, and local read-only certification. Atomic claims, bounded confirmation attempts, startup reconciliation, append-only recovery, diagnostics, database integrity, and backup/restore controls are implemented.
+
+Phase 8G: completed. No live provider write was performed; each real write still requires explicit confirmation for a specific frozen package.
+
+Phase 9: not started.

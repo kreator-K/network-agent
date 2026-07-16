@@ -3,7 +3,8 @@
 ## Setup
 
 1. Create or activate the Python 3.11 environment: `.venv/bin/activate`.
-2. Copy `.env.example` to `.env.local` and provide `TELEGRAM_BOT_TOKEN`.
+2. Copy the template `config/.env.example` to `.env.local` and provide
+   `TELEGRAM_BOT_TOKEN`. Runtime code loads `.env.local` only.
 3. Set `MOCK_MODE=true` for a deterministic demo, or set `MOCK_MODE=false` with `NVIDIA_API_KEY` for real drafting.
 4. Initialize SQLite: `.venv/bin/python scripts/init_db.py`.
 5. Start the bot: `.venv/bin/python scripts/run_bot.py`.

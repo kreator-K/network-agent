@@ -23,6 +23,9 @@ EXPECTED_TABLES = [
     "interactions",
     "linkedin_credentials",
     "linkedin_oauth_states",
+    "linkedin_publish_events",
+    "linkedin_publish_requests",
+    "linkedin_publish_resolutions",
     "personal_brand_profile",
     "prospect_candidates",
     "prospects",
@@ -555,3 +558,95 @@ def test_refinement_loop_constraints_are_seeded_without_overwriting(
     assert constraints["mode"] == "report_only"
     assert constraints["max_apply_per_run"] == "1"
     assert constraints["max_proposals_per_run"] == "3"
+
+
+def test_legacy_linkedin_publish_ledger_migrates_to_terminal_audit_record(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "legacy-linkedin.db"
+    initialize_database(database_path)
+    now = "2026-01-01T00:00:00+00:00"
+    with connect(database_path) as connection:
+        post_id = connection.execute(
+            """INSERT INTO content_posts
+               (draft_text, image_source, status, created_at, updated_at)
+               VALUES ('Legacy preview', 'none', 'draft', ?, ?)""",
+            (now, now),
+        ).lastrowid
+        connection.execute(
+            """INSERT INTO linkedin_credentials
+               (encrypted_access_token, oidc_subject, granted_scopes,
+                authorized_at, status)
+               VALUES ('encrypted', 'legacy-member',
+                       '[\"openid\",\"profile\",\"w_member_social\"]', ?, 'active')""",
+            (now,),
+        )
+        connection.executescript(
+            """
+            DROP TABLE linkedin_publish_resolutions;
+            DROP TABLE linkedin_publish_events;
+            DROP TRIGGER trg_linkedin_publish_terminal_immutable;
+            DROP TRIGGER trg_linkedin_publish_no_delete;
+            DROP TABLE linkedin_publish_requests;
+            CREATE TABLE linkedin_publish_requests (
+                id INTEGER PRIMARY KEY,
+                request_key TEXT NOT NULL UNIQUE,
+                content_post_id INTEGER NOT NULL REFERENCES content_posts(id),
+                package_version INTEGER NOT NULL,
+                publish_mode TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                confirmed_at TEXT,
+                completed_at TEXT,
+                cancelled_at TEXT,
+                external_post_id TEXT,
+                external_post_url TEXT,
+                error_code TEXT,
+                error_summary TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX idx_linkedin_publish_requests_status
+                ON linkedin_publish_requests(status, created_at);
+            CREATE INDEX idx_linkedin_publish_requests_post
+                ON linkedin_publish_requests(content_post_id, package_version);
+            """
+        )
+        connection.execute(
+            """INSERT INTO linkedin_publish_requests
+               (request_key, content_post_id, package_version, publish_mode,
+                payload_json, payload_hash, idempotency_key, status,
+                created_at, expires_at, metadata_json)
+               VALUES ('legacy-key', ?, 1, 'disabled',
+                       '{"commentary":"Legacy","format":"text"}',
+                       'legacy-hash', 'legacy-idempotency', 'preview_ready',
+                       ?, ?, '{}')""",
+            (post_id, now, "2026-01-01T00:15:00+00:00"),
+        )
+        connection.commit()
+
+    initialize_database(database_path)
+    initialize_database(database_path)
+
+    with connect(database_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(linkedin_publish_requests)"
+            ).fetchall()
+        }
+        assert {"publish_format", "credential_id", "author_urn"} <= columns
+        migrated = connection.execute(
+            "SELECT status, author_urn FROM linkedin_publish_requests"
+        ).fetchone()
+        assert migrated["status"] == "expired"
+        assert migrated["author_urn"] == "urn:li:person:legacy-member"
+        assert connection.execute(
+            "SELECT COUNT(*) FROM linkedin_publish_requests_legacy_8ga"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM linkedin_publish_events WHERE event_type='legacy_migrated'"
+        ).fetchone()[0] == 1

@@ -143,6 +143,23 @@ class FakeOrchestrator:
         self.calls.append({"method": "get_pending_content_drafts", "kwargs": kwargs})
         return []
 
+    def get_linkedin_publish_diagnostics(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append({"method": "get_linkedin_publish_diagnostics", "kwargs": kwargs})
+        return {
+            "mode": "disabled",
+            "real_publish_enabled": False,
+            "connection_status": "connected",
+            "member_identity_resolved": True,
+            "pending": 2,
+            "in_progress": 0,
+            "uncertain": 1,
+            "stale": 0,
+            "startup_reconciled_count": 1,
+            "recent_safe_failures": [
+                {"request_id": 7, "status": "publish_uncertain", "code": "timeout"}
+            ],
+        }
+
     def get_pending_drafts(self, **kwargs: Any) -> dict[str, list[dict[str, Any]]]:
         self.calls.append({"method": "get_pending_drafts", "kwargs": kwargs})
         return {"outreach": [], "content": []}
@@ -1295,3 +1312,54 @@ def test_briefing_now_always_replies_for_manual_dry_run() -> None:
     run_async(handlers.briefing_now(FakeUpdate(message), FakeContext(orchestrator)))
     assert "Manual briefing" in message.replies[0]["text"]
     assert orchestrator.calls[0]["kwargs"]["dry_run"] is True
+
+
+def test_prepare_publish_displays_complete_confirmation_boundary() -> None:
+    class PublishOrchestrator(FakeOrchestrator):
+        def prepare_linkedin_publish(self, post_id: int, *, database: str) -> dict[str, Any]:
+            self.calls.append({"method": "prepare_linkedin_publish", "post_id": post_id, "database": database})
+            return {"request_id": 8, "post_id": post_id, "package_version": 2, "format": "text", "visibility": "PUBLIC", "commentary": "Exact commentary", "assets": [], "payload_fingerprint": "abc123", "expires_at": "later"}
+
+    orchestrator = PublishOrchestrator()
+    message = FakeMessage("/prepare_publish 3")
+    run_async(handlers.prepare_publish(FakeUpdate(message), FakeContext(orchestrator)))
+    assert "REAL LINKEDIN PUBLISH PREVIEW" in message.replies[0]["text"]
+    assert "Exact commentary" in message.replies[0]["text"]
+    assert "/confirm_publish 8" in message.replies[0]["text"]
+
+
+def test_confirm_publish_disabled_reports_nothing_published() -> None:
+    class PublishOrchestrator(FakeOrchestrator):
+        def confirm_linkedin_publish(self, request_id: int, *, database: str) -> dict[str, Any]:
+            self.calls.append({"method": "confirm_linkedin_publish", "request_id": request_id, "database": database})
+            return {"status": "disabled", "published": False, "message": "LinkedIn publishing is disabled. Nothing was published."}
+
+    message = FakeMessage("/confirm_publish 8")
+    run_async(handlers.confirm_publish(FakeUpdate(message), FakeContext(PublishOrchestrator())))
+    assert message.replies[0]["text"] == "LinkedIn publishing is disabled. Nothing was published."
+
+
+def test_confirm_publish_rejects_malformed_request_id_without_calling_orchestrator() -> None:
+    orchestrator = FakeOrchestrator()
+    message = FakeMessage("/confirm_publish stale")
+    run_async(handlers.confirm_publish(FakeUpdate(message), FakeContext(orchestrator)))
+    assert message.replies[0]["text"] == "Usage: /confirm_publish <request_id>"
+    assert orchestrator.calls == []
+
+
+def test_linkedin_publish_diagnostics_is_read_only_and_always_replies() -> None:
+    orchestrator = FakeOrchestrator()
+    message = FakeMessage("/linkedin_publish_diagnostics")
+    run_async(
+        handlers.linkedin_publish_diagnostics(
+            FakeUpdate(message), FakeContext(orchestrator)
+        )
+    )
+    text = message.replies[0]["text"]
+    assert "Mode: disabled" in text
+    assert "Pending: 2" in text
+    assert "Uncertain: 1" in text
+    assert "request 7: publish_uncertain (timeout)" in text
+    assert orchestrator.calls == [
+        {"method": "get_linkedin_publish_diagnostics", "kwargs": {"database": "test.db"}}
+    ]

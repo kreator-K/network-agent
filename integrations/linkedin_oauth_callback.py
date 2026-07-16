@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from html import escape
 from typing import Any, Mapping
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 from integrations.linkedin_oauth_client import (
     LINKEDIN_SCOPES,
@@ -65,10 +65,21 @@ class LinkedInCredentialStore:
                  granted_scopes, authorized_at, access_token_expires_at, status,
                  metadata_json, member_display_name)
                 VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
-                (access, refresh, subject, " ".join(sorted(scopes)), now.isoformat(), expiry,
+                (access, refresh, subject, json.dumps(sorted(scopes), separators=(",", ":")), now.isoformat(), expiry,
                  metadata, str(identity.get("name")) if identity.get("name") else None),
             )
         return {"status": "connected", "oidc_subject": subject, "scopes": sorted(scopes), "expires_at": expiry}
+
+    @staticmethod
+    def _decode_scopes(value: str | None) -> set[str]:
+        """Read canonical JSON scopes and tolerate pre-canonical legacy rows."""
+        if not value:
+            return set()
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            parsed = value
+        return normalize_linkedin_scopes(parsed)
 
     def status(self, publish_mode: str) -> dict[str, Any]:
         row = self.connection.execute("SELECT * FROM linkedin_credentials ORDER BY id DESC LIMIT 1").fetchone()
@@ -76,10 +87,59 @@ class LinkedInCredentialStore:
             return {"status": "authorization_required", "required_scopes": list(LINKEDIN_SCOPES), "publishing_mode": publish_mode, "real_publishing_available": False}
         expiry = row["access_token_expires_at"]
         expired = bool(expiry and expiry <= datetime.now(UTC).isoformat())
-        state = "token_expired" if expired else row["status"]
-        if row["status"] == "active" and not expired and set(LINKEDIN_SCOPES).issubset(set(row["granted_scopes"].split())):
+        granted_scopes = self._decode_scopes(row["granted_scopes"])
+        missing_scopes = set(LINKEDIN_SCOPES) - granted_scopes
+        identity_resolved = bool(row["oidc_subject"])
+        try:
+            token_decryptable = bool(self.fernet.decrypt(row["encrypted_access_token"]))
+        except (InvalidToken, TypeError, ValueError):
+            token_decryptable = False
+        if row["status"] != "active":
+            state = row["status"]
+        elif expired:
+            state = "token_expired"
+        elif not token_decryptable:
+            state = "invalid_credentials"
+        elif missing_scopes:
+            state = "permission_missing"
+        elif not identity_resolved:
+            state = "identity_unresolved"
+        else:
             state = "connected"
-        return {"status": state, "required_scopes": list(LINKEDIN_SCOPES), "granted_scopes": row["granted_scopes"].split(), "member_identity_resolved": bool(row["oidc_subject"]), "publishing_mode": publish_mode, "real_publishing_available": False, "token_expires_at": expiry}
+        return {
+            "status": state,
+            "required_scopes": list(LINKEDIN_SCOPES),
+            "granted_scopes": sorted(granted_scopes),
+            "missing_scopes": sorted(missing_scopes),
+            "member_identity_resolved": identity_resolved,
+            "token_decryptable": token_decryptable,
+            "publishing_mode": publish_mode,
+            "real_publishing_available": False,
+            "token_expires_at": expiry,
+        }
+
+    def active_credential(self) -> dict[str, Any]:
+        """Return validated in-memory provider credentials for the API boundary."""
+        row = self.connection.execute(
+            "SELECT * FROM linkedin_credentials WHERE status='active' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            raise LinkedInOAuthError("LinkedIn authorization is required.")
+        status = self.status("disabled")
+        if status["status"] != "connected":
+            raise LinkedInOAuthError(f"LinkedIn credential is not publish-ready: {status['status']}.")
+        try:
+            access_token = self.fernet.decrypt(row["encrypted_access_token"]).decode("utf-8")
+        except (InvalidToken, UnicodeDecodeError, TypeError, ValueError) as exc:
+            raise LinkedInOAuthError("LinkedIn access token cannot be decrypted.") from exc
+        subject = str(row["oidc_subject"] or "").strip()
+        return {
+            "credential_id": int(row["id"]),
+            "access_token": access_token,
+            "author_urn": f"urn:li:person:{subject}",
+            "member_display_name": row["member_display_name"],
+            "granted_scopes": status["granted_scopes"],
+        }
 
     def disconnect(self) -> None:
         with self.connection:
@@ -123,6 +183,9 @@ def local_linkedin_status(connection: sqlite3.Connection, *, client_id: str, cli
         "token_encryption_key_valid": key_valid, "credential_table_available": table_available,
         "active_credential_available": status.get("status") == "connected",
         "member_identity_resolved": bool(status.get("member_identity_resolved")),
+        "granted_scopes": list(status.get("granted_scopes", [])),
+        "missing_scopes": list(status.get("missing_scopes", LINKEDIN_SCOPES)),
+        "token_expires_at": status.get("token_expires_at"),
         "publishing_mode": publish_mode, "real_publish_enabled": real_publish_enabled,
         "real_publishing_available": False,
     }

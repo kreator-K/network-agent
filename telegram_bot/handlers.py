@@ -104,6 +104,12 @@ async def start(update: Any, context: Any) -> None:
                 "/linkedin_reauthorize",
                 "/linkedin_disconnect",
                 "/linkedin_oauth_history",
+                "/prepare_publish <post_id>",
+                "/confirm_publish <request_id>",
+                "/cancel_publish <request_id>",
+                "/publish_request <request_id>",
+                "/publish_history",
+                "/resolve_publish_uncertain <request_id> posted|not_posted",
             ]
         ),
     )
@@ -128,7 +134,9 @@ async def linkedin_connection_status(update: Any, context: Any) -> None:
     except NetworkOrchestratorError:
         await _reply(update, "LinkedIn connection status is unavailable.")
         return
-    await _reply(update, f"LinkedIn status: {result['status']}\nScopes: {', '.join(result.get('granted_scopes', [])) or 'none'}\nPublishing mode: {result['publishing_mode']}\nReal publishing available: no")
+    missing = result.get("missing_scopes", [])
+    missing_line = "\nMissing scopes: " + ", ".join(missing) if missing else ""
+    await _reply(update, f"LinkedIn status: {result['status']}\nScopes: {', '.join(result.get('granted_scopes', [])) or 'none'}{missing_line}\nPublishing mode: {result['publishing_mode']}\nReal publishing available: no")
 
 
 async def linkedin_access_check(update: Any, context: Any) -> None:
@@ -173,7 +181,133 @@ async def linkedin_publish_status(update: Any, context: Any) -> None:
         f"Connection: {result['connection_status']}\n"
         f"Permission w_member_social: {'available' if result['w_member_social'] else 'unavailable until authorization'}\n"
         f"Pending confirmations: {result['pending_confirmations']}\n"
-        f"Real publishing available: no\nNothing can currently be published.")
+        f"Real publishing available: {'yes' if result['real_publishing_available'] else 'no'}\n"
+        "A separate /prepare_publish and /confirm_publish sequence is always required.")
+
+
+async def linkedin_publish_diagnostics(update: Any, context: Any) -> None:
+    """Show local publishing health; this command never contacts LinkedIn."""
+    try:
+        result = _orchestrator(context).get_linkedin_publish_diagnostics(
+            database=_database(context)
+        )
+    except NetworkOrchestratorError:
+        logger.exception("LinkedIn publishing diagnostics failed")
+        await _reply(
+            update,
+            "LinkedIn publishing diagnostics are unavailable. Nothing was published.",
+        )
+        return
+    failures = result.get("recent_safe_failures", [])
+    failure_lines = [
+        f"- request {item['request_id']}: {item['status']} ({item.get('code') or 'unknown'})"
+        for item in failures
+    ]
+    await _reply(
+        update,
+        "LinkedIn publishing diagnostics\n\n"
+        f"Mode: {result['mode']}\n"
+        f"Real publishing enabled: {'yes' if result['real_publish_enabled'] else 'no'}\n"
+        f"Connection: {result.get('connection_status') or 'unknown'}\n"
+        f"Member identity resolved: {'yes' if result.get('member_identity_resolved') else 'no'}\n"
+        f"Pending: {result['pending']}\n"
+        f"In progress: {result['in_progress']}\n"
+        f"Uncertain: {result['uncertain']}\n"
+        f"Stale: {result['stale']}\n"
+        f"Startup reconciliations: {result['startup_reconciled_count']}\n"
+        + ("Recent safe failures:\n" + "\n".join(failure_lines) if failure_lines else "Recent safe failures: none"),
+    )
+
+
+async def prepare_publish(update: Any, context: Any) -> None:
+    """Freeze one approved package; this command never contacts LinkedIn."""
+    post_id = _parse_int(_command_payload(update).strip(), "post_id")
+    if post_id is None:
+        await _reply(update, "Usage: /prepare_publish <post_id>")
+        return
+    try:
+        result = _orchestrator(context).prepare_linkedin_publish(post_id, database=_database(context))
+    except NetworkOrchestratorError as exc:
+        logger.info("LinkedIn preview rejected safely: %s", type(exc).__name__)
+        await _reply(update, "Could not prepare that LinkedIn publish preview. Confirm the package is approved, current, and fully validated.")
+        return
+    assets = result.get("assets", [])
+    if result.get("format") in {"single_image", "multi_image"} and update.effective_message:
+        for asset in assets:
+            try:
+                await update.effective_message.reply_photo(photo=asset["path"], caption=f"Approved image: {asset['filename']}\nAlt text: {asset.get('alt_text') or '-'}")
+            except Exception:
+                logger.warning("Could not render frozen image preview for request_id=%s", result["request_id"])
+    await _reply(update, _format_publish_preview(result))
+
+
+async def confirm_publish(update: Any, context: Any) -> None:
+    """Consume one explicit request ID; freeform consent is never accepted."""
+    request_id = _parse_int(_command_payload(update).strip(), "request_id")
+    if request_id is None:
+        await _reply(update, "Usage: /confirm_publish <request_id>")
+        return
+    try:
+        result = _orchestrator(context).confirm_linkedin_publish(request_id, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not complete that publish request. It may be expired, stale, already consumed, or uncertain. Run /publish_request for its safe status.")
+        return
+    if result.get("status") == "published_linkedin":
+        await _reply(update, f"Published to LinkedIn successfully.\nPost ID: {result['provider_post_id']}\nRequest: {request_id}.")
+    else:
+        await _reply(update, result.get("message", "Nothing was published to LinkedIn."))
+
+
+async def cancel_publish(update: Any, context: Any) -> None:
+    request_id = _parse_int(_command_payload(update).strip(), "request_id")
+    if request_id is None:
+        await _reply(update, "Usage: /cancel_publish <request_id>")
+        return
+    try:
+        _orchestrator(context).cancel_linkedin_publish(request_id, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "That publish request cannot be cancelled.")
+        return
+    await _reply(update, "Publish request cancelled. Nothing was published.")
+
+
+async def publish_request(update: Any, context: Any) -> None:
+    request_id = _parse_int(_command_payload(update).strip(), "request_id")
+    if request_id is None:
+        await _reply(update, "Usage: /publish_request <request_id>")
+        return
+    try:
+        result = _orchestrator(context).get_linkedin_publish_request(request_id, database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "Publish request not found.")
+        return
+    await _reply(update, _format_publish_request(result))
+
+
+async def publish_history(update: Any, context: Any) -> None:
+    try:
+        rows = _orchestrator(context).list_linkedin_publish_history(database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "LinkedIn publish history is unavailable.")
+        return
+    await _reply(update, "No LinkedIn publish requests yet." if not rows else "\n".join(_format_publish_request(row) for row in rows))
+
+
+async def resolve_publish_uncertain(update: Any, context: Any) -> None:
+    parts = _command_payload(update).split()
+    if len(parts) != 2 or parts[1] not in {"posted", "not_posted"}:
+        await _reply(update, "Usage: /resolve_publish_uncertain <request_id> posted|not_posted")
+        return
+    request_id = _parse_int(parts[0], "request_id")
+    if request_id is None:
+        await _reply(update, "Usage: /resolve_publish_uncertain <request_id> posted|not_posted")
+        return
+    try:
+        result = _orchestrator(context).resolve_linkedin_publish_uncertain(request_id, parts[1] == "posted", database=_database(context))
+    except NetworkOrchestratorError:
+        await _reply(update, "That request is not awaiting manual uncertainty resolution.")
+        return
+    await _reply(update, _format_publish_request(result))
 
 
 def _format_linkedin_access_check(result: dict[str, Any]) -> str:
@@ -1601,6 +1735,41 @@ def _format_content_package(post: dict[str, Any]) -> str:
         f"Image: {post.get('image_source')} | Alt text: {post.get('image_alt_text') or '-'}",
         "Nothing has been published.",
     ])
+
+
+def _format_publish_preview(result: dict[str, Any]) -> str:
+    assets = result.get("assets", [])
+    asset_lines = [
+        f"- {asset.get('filename')} | sha256 {str(asset.get('sha256', ''))[:12]} | {asset.get('mime_type')}"
+        for asset in assets
+    ]
+    return "\n".join([
+        "REAL LINKEDIN PUBLISH PREVIEW",
+        f"Request: {result['request_id']}",
+        f"Package: {result['post_id']}, version {result['package_version']}",
+        f"Format: {result['format']}",
+        f"Visibility: {result['visibility']}",
+        "Complete commentary:",
+        result.get("commentary") or "",
+        "Assets:",
+        *(asset_lines or ["- none"]),
+        f"Payload fingerprint: {result['payload_fingerprint']}",
+        f"Expires: {result['expires_at']}",
+        f"Confirm with /confirm_publish {result['request_id']}",
+        "Warning: in real mode, confirmation publishes immediately. Preview creation itself contacted no provider.",
+    ])
+
+
+def _format_publish_request(result: dict[str, Any]) -> str:
+    lines = [
+        f"Request #{result['request_id']} | {result['status']}",
+        f"Package {result['post_id']} v{result['package_version']} | {result['format']}",
+        f"Assets: {len(result.get('assets', []))} | Provider assets: {len(result.get('provider_asset_urns', []))}",
+        f"Post ID: {result.get('provider_post_id') or '-'}",
+    ]
+    if result.get("safe_error_summary"):
+        lines.append(f"Safe failure: {result['safe_error_summary']}")
+    return "\n".join(lines)
 
 
 def _package_markup(post_id: Any) -> InlineKeyboardMarkup:

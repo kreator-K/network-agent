@@ -1,6 +1,7 @@
 """Read-only cross-table integrity checks for Network Growth Agent."""
 
 import json
+import hashlib
 import sqlite3
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any
 from db.database import connect
 from db.models import PersonalBrandProfileData
 from db.database import personal_brand_profile_hash, signal_scoring_config_hash
+from config.settings import settings
 
 
 DatabaseRef = sqlite3.Connection | str | Path
@@ -632,6 +634,76 @@ class SystemIntegrityAgent:
                 violations.append({"type": "package_invalid_phase_status", "post_id": post_id})
         return _result("content_package_integrity", violations)
 
+    def check_linkedin_publish_integrity(self, database: DatabaseRef) -> dict[str, Any]:
+        """Check durable approval, hashing, identity, and replay invariants."""
+        connection, should_close = _coerce_connection(database)
+        try:
+            rows = _fetch_dicts(
+                connection,
+                """SELECT requests.*, posts.status AS post_status,
+                          posts.package_version AS current_package_version,
+                          credentials.oidc_subject, credentials.granted_scopes
+                   FROM linkedin_publish_requests AS requests
+                   LEFT JOIN content_posts AS posts ON posts.id=requests.content_post_id
+                   LEFT JOIN linkedin_credentials AS credentials ON credentials.id=requests.credential_id""",
+            )
+        finally:
+            if should_close:
+                connection.close()
+        violations: list[dict[str, Any]] = []
+        notes: list[str] = []
+        if settings.linkedin_publish_mode not in {"disabled", "mock", "real"}:
+            violations.append({"type": "publish_mode_invalid"})
+        elif settings.linkedin_real_publish_enabled and settings.linkedin_publish_mode != "real":
+            violations.append({"type": "publish_kill_switch_mode_mismatch"})
+        elif settings.linkedin_publish_mode == "real" and not settings.linkedin_real_publish_enabled:
+            notes = ["Real mode is selected but the independent publish kill switch is off."]
+        else:
+            notes = []
+        terminal = {"published_linkedin", "published_mock", "publish_uncertain", "upload_uncertain", "image_upload_uncertain", "processing_unknown", "cancelled", "expired"}
+        for row in rows:
+            request_id = row["id"]
+            if not _is_json_type(row["payload_json"], dict):
+                violations.append({"type": "publish_payload_json_invalid", "request_id": request_id})
+            if not _is_json_type(row["asset_manifest_json"], list):
+                violations.append({"type": "publish_asset_manifest_json_invalid", "request_id": request_id})
+            if row["post_status"] != "approved_for_later_posting":
+                violations.append({"type": "publish_request_unapproved_package", "request_id": request_id})
+            if row["package_version"] != row["current_package_version"] and row["status"] not in terminal:
+                violations.append({"type": "publish_request_obsolete_package", "request_id": request_id})
+            actual_hash = hashlib.sha256(str(row["payload_json"]).encode()).hexdigest()
+            if actual_hash != row["payload_hash"]:
+                violations.append({"type": "publish_payload_hash_mismatch", "request_id": request_id})
+            expected_author = f"urn:li:person:{row['oidc_subject']}" if row["oidc_subject"] else None
+            if row["author_urn"] != expected_author:
+                violations.append({"type": "publish_author_mismatch", "request_id": request_id})
+            scopes = set(_json_list(row["granted_scopes"]))
+            if "w_member_social" not in scopes:
+                violations.append({"type": "publish_credential_missing_scope", "request_id": request_id})
+            stored = " ".join(str(row.get(field) or "") for field in ("payload_json", "asset_manifest_json", "provider_asset_urns_json", "safe_error_summary"))
+            if any(marker in stored.lower() for marker in ("bearer ", "access_token", "refresh_token", "uploadurl", "upload_url")):
+                violations.append({"type": "publish_request_contains_sensitive_material", "request_id": request_id})
+            assets = _json_list(row["asset_manifest_json"])
+            if row["publish_format"] == "single_image" and len(assets) != 1:
+                violations.append({"type": "single_image_asset_count", "request_id": request_id})
+            if row["publish_format"] == "multi_image" and not 2 <= len(assets) <= settings.linkedin_max_multi_images:
+                violations.append({"type": "multi_image_asset_count", "request_id": request_id})
+            provider_urns = _json_list(row["provider_asset_urns_json"])
+            expected_prefix = {
+                "single_image": "urn:li:image:",
+                "multi_image": "urn:li:image:",
+                "video": "urn:li:video:",
+                "document": "urn:li:document:",
+            }.get(row["publish_format"])
+            if expected_prefix and any(
+                not isinstance(urn, str) or not urn.startswith(expected_prefix)
+                for urn in provider_urns
+            ):
+                violations.append({"type": "publish_provider_asset_urn_invalid", "request_id": request_id})
+            if row["status"] == "published_linkedin" and not row["provider_post_id"]:
+                violations.append({"type": "published_request_missing_provider_id", "request_id": request_id})
+        return {"check": "linkedin_publish_integrity", "passed": not violations, "violations": violations, "notes": notes}
+
     def run_full_integrity_check(self, database: DatabaseRef) -> dict[str, Any]:
         """Run all integrity checks and summarize the result."""
         checks = [
@@ -645,6 +717,7 @@ class SystemIntegrityAgent:
             self.check_signal_integrity(database),
             self.check_signal_scoring_and_opportunities(database),
             self.check_content_package_integrity(database),
+            self.check_linkedin_publish_integrity(database),
         ]
         overall_passed = all(bool(check["passed"]) for check in checks)
         failed_count = sum(1 for check in checks if not check["passed"])
@@ -683,6 +756,13 @@ def _parse_id_list(value: Any) -> list[int]:
     return [int(item) for item in str(value).split(",") if item]
 
 
+def _is_json_type(value: Any, expected_type: type[Any]) -> bool:
+    try:
+        return isinstance(json.loads(str(value)), expected_type)
+    except (json.JSONDecodeError, TypeError):
+        return False
+
+
 def _json_object(raw_value: Any) -> dict[str, Any]:
     if not isinstance(raw_value, str):
         return {}
@@ -691,6 +771,16 @@ def _json_object(raw_value: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_list(raw_value: Any) -> list[Any]:
+    if not isinstance(raw_value, str):
+        return []
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def _result(check_name: str, violations: list[dict[str, Any]]) -> dict[str, Any]:
