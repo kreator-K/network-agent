@@ -50,7 +50,7 @@ def test_handlers_and_automated_workflows_cannot_import_provider_client() -> Non
 
 def test_runtime_settings_load_only_env_local() -> None:
     source = _source("config/settings.py")
-    assert 'load_dotenv(".env.local", override=True)' in source
+    assert 'load_dotenv(".env.local", override=_DOTENV_OVERRIDE)' in source
     assert ".env.example" not in source
     assert "load_dotenv()" not in source
 

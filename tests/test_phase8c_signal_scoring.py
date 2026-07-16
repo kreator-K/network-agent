@@ -15,8 +15,14 @@ from integrations.public_signal_gateway import RawFeedItem
 class FakeSemanticModel:
     """Captures semantic calls without any provider access."""
 
-    def __init__(self, result: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        result: dict[str, Any] | None = None,
+        *,
+        fallback_used: bool = False,
+    ) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.fallback_used = fallback_used
         self.result = result or {
             "semantic_profile_relevance": 80.0,
             "personal_angle_availability": 20.0,
@@ -31,7 +37,13 @@ class FakeSemanticModel:
 
     def run_task(self, task_type: str, prompt: str, **kwargs: Any) -> dict[str, Any]:
         self.calls.append({"task_type": task_type, "prompt": prompt, **kwargs})
-        return {"task_type": task_type, "mode": "model", "fallback_used": False, "result": self.result}
+        return {
+            "task_type": task_type,
+            "mode": "mock" if self.fallback_used else "model",
+            "fallback_used": self.fallback_used,
+            "fallback_reason": "provider unavailable" if self.fallback_used else None,
+            "result": self.result,
+        }
 
 
 def _database_path(tmp_path: Path) -> Path:
@@ -110,6 +122,32 @@ def test_invalid_semantic_output_falls_back_to_deterministic_only(tmp_path: Path
     result = agent.score_signal(_scorable_signal(agent, database), database)
     assert result["mode"] == "deterministic_fallback"
     assert result["score"]["semantic"] is None
+
+
+def test_model_fallback_does_not_apply_zero_mock_semantic_scores(tmp_path: Path) -> None:
+    database = _database_path(tmp_path)
+    model = FakeSemanticModel(
+        {
+            "semantic_profile_relevance": 0.0,
+            "personal_angle_availability": 0.0,
+            "audience_interest_potential": 0.0,
+            "humor_suitability": 0.0,
+            "generic_commentary_risk": 0.0,
+            "factual_risk": 0.0,
+            "suggested_treatment": "mock",
+            "explanation": "mock",
+            "confidence": 0.0,
+        },
+        fallback_used=True,
+    )
+    agent = SignalIntelligenceAgent(model_agent=model)
+
+    result = agent.score_signal(_scorable_signal(agent, database), database)
+
+    assert result["mode"] == "deterministic_fallback"
+    assert result["score"]["semantic"] is None
+    assert result["score"]["confidence"] == 0.7
+    assert result["fallback_reason"] == "provider unavailable"
 
 
 def test_qualifying_signal_creates_pre_draft_opportunity(tmp_path: Path) -> None:

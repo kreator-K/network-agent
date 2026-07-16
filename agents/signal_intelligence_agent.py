@@ -870,10 +870,12 @@ class SignalIntelligenceAgent:
         schema = {"semantic_profile_relevance": 0.0, "personal_angle_availability": 0.0, "audience_interest_potential": 0.0, "humor_suitability": 0.0, "generic_commentary_risk": 0.0, "factual_risk": 0.0, "suggested_treatment": "", "explanation": "", "confidence": 0.0}
         prompt = "Score this stored public signal without inventing personal experiences. Return JSON only. " + _canonical_json({"title": row["title"], "summary": row["summary"], "deterministic": deterministic.model_dump(), "profile": self.profile_agent.build_personal_brand_context(profile)})
         response = self.model_agent.run_task("signal_semantic_scoring", prompt, expected_schema=schema)
+        if response["fallback_used"]:
+            return None, "deterministic_fallback", str(
+                response.get("fallback_reason") or "model fallback"
+            )
         try:
             semantic = SemanticSignalScores.model_validate(response["result"])
-            if response["fallback_used"]:
-                return semantic, "deterministic_fallback", str(response.get("fallback_reason") or "model fallback")
             return semantic, "model_assisted", None
         except Exception:
             return None, "deterministic_fallback", "Model output did not satisfy semantic score schema."

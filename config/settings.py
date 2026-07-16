@@ -6,7 +6,13 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 
-load_dotenv(".env.local", override=True)
+_DOTENV_OVERRIDE = os.getenv("NETWORK_AGENT_DOTENV_OVERRIDE", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+load_dotenv(".env.local", override=_DOTENV_OVERRIDE)
 
 
 def _env_bool(name: str, default: bool) -> bool:

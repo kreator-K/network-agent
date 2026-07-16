@@ -50,6 +50,7 @@ def initialize_database(
         _migrate_refinement_outcomes_explicit_columns(connection)
         _migrate_calendar_block_lifecycle_columns(connection)
         _migrate_signal_scoring_columns(connection)
+        _repair_content_opportunities_signal_foreign_key(connection)
         _migrate_linkedin_oauth_columns(connection)
         _migrate_linkedin_publish_columns(connection)
         connection.execute(
@@ -63,7 +64,7 @@ def initialize_database(
             "INSERT OR IGNORE INTO briefing_settings (id, updated_at) VALUES (1, ?)",
             (_utc_now(),),
         )
-        connection.execute("PRAGMA user_version = 10")
+        connection.execute("PRAGMA user_version = 11")
 
 
 def canonical_signal_scoring_config_json(config: dict[str, Any]) -> str:
@@ -785,6 +786,7 @@ def _rebuild_signals_for_phase8c(connection: sqlite3.Connection) -> None:
         DROP INDEX IF EXISTS idx_signals_published_at;
         DROP INDEX IF EXISTS idx_signals_status;
         DROP INDEX IF EXISTS idx_signals_score;
+        PRAGMA legacy_alter_table = ON;
         ALTER TABLE signals RENAME TO signals_phase8c_legacy;
         CREATE TABLE signals (
             id INTEGER PRIMARY KEY,
@@ -830,8 +832,95 @@ def _rebuild_signals_for_phase8c(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_signals_published_at ON signals(published_at);
         CREATE INDEX IF NOT EXISTS idx_signals_status ON signals(status);
         CREATE INDEX IF NOT EXISTS idx_signals_score ON signals(total_score DESC);
+        PRAGMA legacy_alter_table = OFF;
         """
     )
+
+
+def _repair_content_opportunities_signal_foreign_key(
+    connection: sqlite3.Connection,
+) -> None:
+    """Repair Phase 8C databases whose opportunity FK retained a temp name."""
+    foreign_keys = connection.execute(
+        "PRAGMA foreign_key_list(content_opportunities)"
+    ).fetchall()
+    primary_signal_targets = {
+        str(row["table"])
+        for row in foreign_keys
+        if str(row["from"]) == "primary_signal_id"
+    }
+    if not primary_signal_targets or primary_signal_targets == {"signals"}:
+        return
+    if primary_signal_targets != {"signals_phase8c_legacy"}:
+        raise RuntimeError(
+            "content_opportunities has an unsupported primary-signal foreign key"
+        )
+
+    if connection.in_transaction:
+        connection.commit()
+    connection.execute("PRAGMA foreign_keys = OFF")
+    try:
+        connection.executescript(
+            """
+            BEGIN IMMEDIATE;
+            CREATE TABLE content_opportunities_phase8c_repaired (
+                id INTEGER PRIMARY KEY,
+                primary_signal_id INTEGER NOT NULL REFERENCES signals(id) ON DELETE RESTRICT,
+                supporting_signal_ids_json TEXT NOT NULL DEFAULT '[]',
+                profile_version INTEGER NOT NULL REFERENCES personal_brand_profile(version),
+                scoring_config_version INTEGER NOT NULL REFERENCES signal_scoring_config(version),
+                headline TEXT NOT NULL,
+                suggested_angle TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                target_audience TEXT NOT NULL,
+                recommended_format TEXT NOT NULL,
+                suggested_treatment TEXT NOT NULL,
+                humor_suitability REAL NOT NULL,
+                factual_risk REAL NOT NULL,
+                generic_commentary_risk REAL NOT NULL,
+                score_json TEXT NOT NULL,
+                total_score REAL NOT NULL,
+                confidence REAL NOT NULL,
+                source_references_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'candidate',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                decided_at TEXT,
+                decision_reason TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                CHECK (status IN ('candidate', 'saved', 'selected', 'dismissed', 'expired')),
+                CHECK (humor_suitability >= 0 AND humor_suitability <= 100),
+                CHECK (factual_risk >= 0 AND factual_risk <= 100),
+                CHECK (generic_commentary_risk >= 0 AND generic_commentary_risk <= 100),
+                CHECK (total_score >= 0 AND total_score <= 100),
+                CHECK (confidence >= 0 AND confidence <= 1)
+            );
+            INSERT INTO content_opportunities_phase8c_repaired
+            SELECT * FROM content_opportunities;
+            DROP TABLE content_opportunities;
+            PRAGMA legacy_alter_table = ON;
+            ALTER TABLE content_opportunities_phase8c_repaired
+                RENAME TO content_opportunities;
+            PRAGMA legacy_alter_table = OFF;
+            CREATE INDEX IF NOT EXISTS idx_content_opportunities_status_score
+                ON content_opportunities(status, total_score DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_active_opportunity_per_signal_config
+                ON content_opportunities(
+                    primary_signal_id,
+                    profile_version,
+                    scoring_config_version
+                )
+                WHERE status IN ('candidate', 'saved', 'selected');
+            COMMIT;
+            """
+        )
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(
+                "Foreign-key validation failed after repairing content opportunities"
+            )
+    finally:
+        connection.execute("PRAGMA foreign_keys = ON")
 
 
 def _column_names(connection: sqlite3.Connection, table_name: str) -> set[str]:

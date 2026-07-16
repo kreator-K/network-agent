@@ -1,6 +1,7 @@
 """Release gate and command-registry regression tests."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -19,9 +20,18 @@ def test_command_reference_matches_registered_handlers() -> None:
 
 
 def test_release_check_passes_without_provider_writes() -> None:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "LINKEDIN_PUBLISH_MODE": "disabled",
+            "LINKEDIN_REAL_PUBLISH_ENABLED": "false",
+            "NETWORK_AGENT_DOTENV_OVERRIDE": "false",
+        }
+    )
     result = subprocess.run(
-        [sys.executable, "scripts/release_check.py", "--skip-tests"],
+        [sys.executable, str(ROOT / "scripts/release_check.py"), "--skip-tests"],
         cwd=ROOT,
+        env=environment,
         check=False,
         capture_output=True,
         text=True,

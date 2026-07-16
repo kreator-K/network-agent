@@ -209,6 +209,64 @@ def test_init_db_is_idempotent(tmp_path: Path) -> None:
     assert [row["rule_key"] for row in rows] == ["cadence_floor_days"]
 
 
+def test_init_db_repairs_legacy_content_opportunity_signal_foreign_key(
+    tmp_path: Path,
+) -> None:
+    """A temporary Phase 8C table name must not survive in durable FKs."""
+    database_path = tmp_path / "network_agent.db"
+    initialize_database(database_path)
+    connection = sqlite3.connect(database_path)
+    try:
+        table_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' "
+            "AND name='content_opportunities'"
+        ).fetchone()[0]
+        broken_sql = table_sql.replace(
+            "CREATE TABLE content_opportunities",
+            "CREATE TABLE content_opportunities_broken",
+            1,
+        ).replace(
+            "REFERENCES signals(id)",
+            'REFERENCES "signals_phase8c_legacy"(id)',
+            1,
+        )
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute(broken_sql)
+        connection.execute("DROP TABLE content_opportunities")
+        connection.execute("PRAGMA legacy_alter_table = ON")
+        connection.execute(
+            "ALTER TABLE content_opportunities_broken "
+            "RENAME TO content_opportunities"
+        )
+        connection.execute("PRAGMA legacy_alter_table = OFF")
+        connection.commit()
+    finally:
+        connection.close()
+
+    initialize_database(database_path)
+
+    with connect(database_path) as repaired:
+        opportunity_targets = {
+            row["table"]
+            for row in repaired.execute(
+                "PRAGMA foreign_key_list(content_opportunities)"
+            ).fetchall()
+            if row["from"] == "primary_signal_id"
+        }
+        content_post_targets = {
+            row["table"]
+            for row in repaired.execute(
+                "PRAGMA foreign_key_list(content_posts)"
+            ).fetchall()
+            if row["from"] == "opportunity_id"
+        }
+        user_version = repaired.execute("PRAGMA user_version").fetchone()[0]
+
+    assert opportunity_targets == {"signals"}
+    assert content_post_targets == {"content_opportunities"}
+    assert user_version == 11
+
+
 def test_prospect_model_rejects_invalid_status() -> None:
     """Pydantic validation rejects statuses outside the schema contract."""
     with pytest.raises(ValidationError):

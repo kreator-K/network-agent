@@ -256,6 +256,48 @@ class ContentInspirationAgent:
             if should_close:
                 connection.close()
 
+    def get_publish_readiness(
+        self,
+        post_id: int,
+        database: sqlite3.Connection | str | Path,
+    ) -> dict[str, Any]:
+        """Explain whether one content record can enter the publish-preview flow."""
+        connection, should_close = _coerce_connection(database)
+        try:
+            row = connection.execute(
+                "SELECT * FROM content_posts WHERE id = ?",
+                (post_id,),
+            ).fetchone()
+            if row is None:
+                return {
+                    "exists": False,
+                    "package_backed": False,
+                    "ready": False,
+                    "status": None,
+                    "blockers": [f"Content post id {post_id} does not exist."],
+                }
+            post = _content_post_from_row(row)
+            package_backed = post.package_json is not None
+            blockers: list[str] = []
+            if not package_backed:
+                blockers.append(
+                    "This is a plain topic draft, not a source-grounded content package."
+                )
+            else:
+                blockers.extend(self.validate_package_for_approval(post))
+            if post.status != "approved_for_later_posting":
+                blockers.append("The content package has not been approved for later posting.")
+            return {
+                "exists": True,
+                "package_backed": package_backed,
+                "ready": not blockers,
+                "status": post.status,
+                "blockers": blockers,
+            }
+        finally:
+            if should_close:
+                connection.close()
+
     def validate_package_for_approval(self, post: ContentPost) -> list[str]:
         """Return deterministic approval blockers without trusting model output."""
         blockers: list[str] = []

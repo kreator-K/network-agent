@@ -279,6 +279,31 @@ async def prepare_publish(update: Any, context: Any) -> None:
         await _reply(update, "Usage: /prepare_publish <post_id>")
         return
     try:
+        readiness = _orchestrator(context).get_content_publish_readiness(
+            post_id=post_id,
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not inspect that content post safely.")
+        return
+    if not readiness["exists"]:
+        await _reply(update, f"Content post id={post_id} does not exist.")
+        return
+    if not readiness["package_backed"]:
+        await _reply(
+            update,
+            f"Post #{post_id} is a plain topic draft, not a publishable content package. "
+            "Use /content_opportunities, then /prepare_content <opportunity_id>.",
+        )
+        return
+    if not readiness["ready"]:
+        blockers = "\n".join(f"- {item}" for item in readiness["blockers"])
+        await _reply(
+            update,
+            f"Content package #{post_id} is not ready for publication:\n{blockers}",
+        )
+        return
+    try:
         result = _orchestrator(context).prepare_linkedin_publish(post_id, database=_database(context))
     except NetworkOrchestratorError as exc:
         logger.info("LinkedIn preview rejected safely: %s", type(exc).__name__)
@@ -1103,6 +1128,25 @@ async def content_package(update: Any, context: Any) -> None:
         await _reply(update, "Usage: /content_package <post_id>")
         return
     try:
+        readiness = _orchestrator(context).get_content_publish_readiness(
+            post_id=post_id,
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not inspect that content post safely.")
+        return
+    if not readiness["exists"]:
+        await _reply(update, f"Content post id={post_id} does not exist.")
+        return
+    if not readiness["package_backed"]:
+        await _reply(
+            update,
+            f"Post #{post_id} exists, but it is a plain topic draft rather than a "
+            "source-grounded content package. Use /content_opportunities to start "
+            "the package workflow.",
+        )
+        return
+    try:
         post = _orchestrator(context).get_content_package(post_id=post_id, database=_database(context))
     except NetworkOrchestratorError:
         await _reply(update, f"Could not find content package id={post_id}.")
@@ -1397,10 +1441,13 @@ async def button_callback(update: Any, context: Any) -> None:
             )
         except NetworkOrchestratorError:
             await query.edit_message_text(
-                "Could not approve that content draft. Please draft again."
+                "This plain draft cannot be approved for LinkedIn publishing. "
+                "Create a source-grounded package from /content_opportunities."
             )
             return
-        await query.edit_message_text("Marked approved for later posting.")
+        await query.edit_message_text(
+            "Content package approved for later posting. Nothing has been published."
+        )
         return
     if data.startswith("post_discard:"):
         post_id = _callback_id(data, "post_discard")
@@ -2105,10 +2152,6 @@ def _post_approval_markup(post_id: Any) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton("Save Draft", callback_data=f"post_save:{post_id}"),
-                InlineKeyboardButton(
-                    "Mark Approved for Later Posting",
-                    callback_data=f"post_approve_later:{post_id}",
-                ),
                 InlineKeyboardButton("Discard Draft", callback_data=f"post_discard:{post_id}"),
             ]
         ]

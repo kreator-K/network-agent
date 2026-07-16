@@ -1224,6 +1224,25 @@ class NetworkOrchestrator:
         except Exception as exc:
             _raise_with_context("get_content_package", {"post_id": post_id}, exc)
 
+    def get_content_publish_readiness(
+        self,
+        post_id: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Return deterministic package-readiness blockers without provider access."""
+        try:
+            return self.content_inspiration_agent.get_publish_readiness(
+                post_id,
+                database,
+            )
+        except Exception as exc:
+            _raise_with_context(
+                "get_content_publish_readiness",
+                {"post_id": post_id},
+                exc,
+            )
+
     def list_pending_content_packages(self, *, database: sqlite3.Connection | DatabaseRef) -> list[dict[str, Any]]:
         """List existing package drafts without making a post."""
         try:
@@ -1261,12 +1280,10 @@ class NetworkOrchestrator:
         *,
         database: sqlite3.Connection | DatabaseRef,
     ) -> dict[str, Any]:
-        """Mark a content draft approved internally without publishing."""
-        return self._update_content_post_status(
+        """Approve only package-backed content; plain topic drafts remain drafts."""
+        return self.approve_content_package_for_later(
             post_id,
-            "approved_for_later_posting",
             database=database,
-            method_name="approve_content_draft_for_later_posting",
         )
 
     def discard_content_draft(

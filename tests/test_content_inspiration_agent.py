@@ -159,6 +159,42 @@ def test_save_draft_to_db_persists_with_draft_status(database_path: Path) -> Non
     assert post.inspiration_source_notes == "Use a crisp hook."
 
 
+def test_plain_draft_publish_readiness_explains_package_requirement(
+    database_path: Path,
+) -> None:
+    agent = ContentInspirationAgent(FakeModelOrchestrationAgent())
+    with connect(database_path) as connection:
+        post = agent.save_draft_to_db(
+            {
+                "draft_text": "Draft",
+                "image_source": "none",
+                "image_path": None,
+                "inspiration_source_notes": None,
+            },
+            connection,
+        )
+        readiness = agent.get_publish_readiness(post.id or 0, connection)
+
+    assert readiness["exists"] is True
+    assert readiness["package_backed"] is False
+    assert readiness["ready"] is False
+    assert "plain topic draft" in readiness["blockers"][0]
+
+
+def test_missing_post_publish_readiness_is_explicit(database_path: Path) -> None:
+    agent = ContentInspirationAgent(FakeModelOrchestrationAgent())
+
+    readiness = agent.get_publish_readiness(999, database_path)
+
+    assert readiness == {
+        "exists": False,
+        "package_backed": False,
+        "ready": False,
+        "status": None,
+        "blockers": ["Content post id 999 does not exist."],
+    }
+
+
 def test_get_pending_drafts_returns_draft_status(database_path: Path) -> None:
     agent = ContentInspirationAgent(FakeModelOrchestrationAgent())
     with connect(database_path) as connection:

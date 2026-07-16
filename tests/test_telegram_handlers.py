@@ -143,6 +143,18 @@ class FakeOrchestrator:
         self.calls.append({"method": "get_pending_content_drafts", "kwargs": kwargs})
         return []
 
+    def get_content_publish_readiness(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(
+            {"method": "get_content_publish_readiness", "kwargs": kwargs}
+        )
+        return {
+            "exists": True,
+            "package_backed": True,
+            "ready": True,
+            "status": "approved_for_later_posting",
+            "blockers": [],
+        }
+
     def get_linkedin_publish_diagnostics(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append({"method": "get_linkedin_publish_diagnostics", "kwargs": kwargs})
         return {
@@ -1084,11 +1096,7 @@ def test_draft_post_handles_photo_reply_as_user_image() -> None:
     assert photo_message.replies[0]["text"] == "Image saved for your next /draft_post."
     assert "based on your uploaded image" in message.replies[0]["text"]
     assert message.replies[0]["reply_markup"].inline_keyboard[0][0].text == "Save Draft"
-    assert (
-        message.replies[0]["reply_markup"].inline_keyboard[0][1].text
-        == "Mark Approved for Later Posting"
-    )
-    assert message.replies[0]["reply_markup"].inline_keyboard[0][2].text == "Discard Draft"
+    assert message.replies[0]["reply_markup"].inline_keyboard[0][1].text == "Discard Draft"
 
 
 def test_draft_post_without_photo_reply_has_no_user_image() -> None:
@@ -1159,13 +1167,15 @@ def test_content_save_callback_updates_status() -> None:
     assert orchestrator.calls[0]["kwargs"]["post_id"] == 3
 
 
-def test_content_approve_later_callback_updates_status_only() -> None:
+def test_legacy_content_approve_callback_uses_strict_package_approval() -> None:
     orchestrator = FakeOrchestrator()
     callback = FakeCallbackQuery("post_approve_later:3")
 
     run_async(handlers.button_callback(FakeUpdate(callback_query=callback), FakeContext(orchestrator)))
 
-    assert callback.edited_text == "Marked approved for later posting."
+    assert callback.edited_text == (
+        "Content package approved for later posting. Nothing has been published."
+    )
     assert orchestrator.calls[0]["method"] == "approve_content_draft_for_later_posting"
     assert "publish" not in str(orchestrator.calls).lower()
 
@@ -1326,6 +1336,51 @@ def test_prepare_publish_displays_complete_confirmation_boundary() -> None:
     assert "REAL LINKEDIN PUBLISH PREVIEW" in message.replies[0]["text"]
     assert "Exact commentary" in message.replies[0]["text"]
     assert "/confirm_publish 8" in message.replies[0]["text"]
+
+
+def test_prepare_publish_explains_plain_draft_is_not_a_package() -> None:
+    class PlainDraftOrchestrator(FakeOrchestrator):
+        def get_content_publish_readiness(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "exists": True,
+                "package_backed": False,
+                "ready": False,
+                "status": "draft",
+                "blockers": ["This is a plain topic draft."],
+            }
+
+    message = FakeMessage("/prepare_publish 3")
+    run_async(
+        handlers.prepare_publish(
+            FakeUpdate(message), FakeContext(PlainDraftOrchestrator())
+        )
+    )
+
+    assert message.replies[0]["text"] == (
+        "Post #3 is a plain topic draft, not a publishable content package. "
+        "Use /content_opportunities, then /prepare_content <opportunity_id>."
+    )
+
+
+def test_content_package_explains_existing_plain_draft() -> None:
+    class PlainDraftOrchestrator(FakeOrchestrator):
+        def get_content_publish_readiness(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "exists": True,
+                "package_backed": False,
+                "ready": False,
+                "status": "draft",
+                "blockers": ["This is a plain topic draft."],
+            }
+
+    message = FakeMessage("/content_package 3")
+    run_async(
+        handlers.content_package(
+            FakeUpdate(message), FakeContext(PlainDraftOrchestrator())
+        )
+    )
+
+    assert "exists, but it is a plain topic draft" in message.replies[0]["text"]
 
 
 def test_confirm_publish_disabled_reports_nothing_published() -> None:
