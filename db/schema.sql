@@ -469,6 +469,12 @@ CREATE TABLE IF NOT EXISTS linkedin_oauth_states (
     correlation_id TEXT,
     failure_stage TEXT,
     error_summary TEXT,
+    granted_scopes TEXT,
+    missing_scopes TEXT,
+    unexpected_scopes TEXT,
+    raw_scope_type TEXT,
+    scope_field_present INTEGER,
+    introspection_attempted INTEGER NOT NULL DEFAULT 0,
     CHECK (status IN ('pending', 'consumed', 'expired', 'cancelled', 'failed'))
 );
 

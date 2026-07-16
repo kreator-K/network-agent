@@ -13,11 +13,12 @@ import base64
 import time
 import hashlib
 import sqlite3
+import re
 from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import unquote_plus, urlencode
 
 import requests
 from cryptography.fernet import Fernet, InvalidToken
@@ -26,6 +27,7 @@ from cryptography.fernet import Fernet, InvalidToken
 LINKEDIN_SCOPES = ("openid", "profile", "w_member_social")
 AUTHORIZATION_URL = "https://www.linkedin.com/oauth/v2/authorization"
 TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken"
+INTROSPECTION_URL = "https://www.linkedin.com/oauth/v2/introspectToken"
 
 
 class LinkedInOAuthError(RuntimeError):
@@ -39,6 +41,31 @@ class LinkedInTokenSet:
     expires_in: int | None
     scope: str
     id_token: str | None = None
+    scope_field_present: bool = True
+    raw_scope_type: str = "str"
+    scope_source: str = "token_response"
+    introspection_attempted: bool = False
+
+
+def normalize_linkedin_scopes(raw_scopes: Any) -> set[str]:
+    """Normalize LinkedIn token or introspection scope representations."""
+    if raw_scopes is None:
+        return set()
+    if isinstance(raw_scopes, (list, tuple, set, frozenset)):
+        normalized: set[str] = set()
+        for item in raw_scopes:
+            normalized.update(normalize_linkedin_scopes(item))
+        return normalized
+    if not isinstance(raw_scopes, str):
+        return set()
+    decoded = unquote_plus(raw_scopes).strip()
+    return {part for part in re.split(r"[\s,]+", decoded) if part}
+
+
+def serialize_linkedin_scopes(scopes: set[str]) -> str:
+    ordered = [scope for scope in LINKEDIN_SCOPES if scope in scopes]
+    ordered.extend(sorted(scopes.difference(LINKEDIN_SCOPES)))
+    return " ".join(ordered)
 
 
 @dataclass(frozen=True)
@@ -116,6 +143,20 @@ class LinkedInOAuthStateStore:
         self.connection.execute(
             "UPDATE linkedin_oauth_states SET status='failed', failure_stage=?, error_summary=?, correlation_id=? WHERE id=? AND status='consumed'",
             (stage[:80], reason[:240], correlation_id, state_id),
+        )
+        self.connection.commit()
+
+    def record_scope_diagnostics(
+        self, state_id: int, *, granted_scopes: str, missing_scopes: str,
+        unexpected_scopes: str, raw_scope_type: str, scope_field_present: bool,
+        introspection_attempted: bool,
+    ) -> None:
+        self.connection.execute(
+            """UPDATE linkedin_oauth_states SET granted_scopes=?, missing_scopes=?,
+            unexpected_scopes=?, raw_scope_type=?, scope_field_present=?,
+            introspection_attempted=? WHERE id=?""",
+            (granted_scopes, missing_scopes, unexpected_scopes, raw_scope_type[:40],
+             int(scope_field_present), int(introspection_attempted), state_id),
         )
         self.connection.commit()
 
@@ -202,16 +243,51 @@ class LinkedInOAuthClient:
             access_token = payload["access_token"]
         except (ValueError, KeyError, TypeError) as exc:
             raise LinkedInOAuthError("LinkedIn OAuth returned an invalid token response.") from exc
+        raw_scope = payload.get("scope")
+        scope_field_present = "scope" in payload and raw_scope is not None
+        granted_scopes = normalize_linkedin_scopes(raw_scope)
+        introspection_attempted = False
+        scope_source = "token_response"
+        if not granted_scopes:
+            introspection_attempted = True
+            granted_scopes = self.introspect_token(str(access_token))
+            scope_source = "introspection"
         token_set = LinkedInTokenSet(
             access_token=str(access_token),
             refresh_token=str(payload["refresh_token"]) if payload.get("refresh_token") else None,
             expires_in=int(payload["expires_in"]) if payload.get("expires_in") is not None else None,
-                scope=str(payload.get("scope") or " ".join(self.scopes)),
+            scope=serialize_linkedin_scopes(granted_scopes),
             id_token=str(payload["id_token"]) if payload.get("id_token") else None,
+            scope_field_present=scope_field_present,
+            raw_scope_type=type(raw_scope).__name__,
+            scope_source=scope_source,
+            introspection_attempted=introspection_attempted,
         )
         if persist_tokens:
             self.save_tokens(token_set)
         return token_set
+
+    def introspect_token(self, access_token: str) -> set[str]:
+        """Resolve scopes only when the token response omitted usable scope data."""
+        try:
+            response = self.http_session.post(
+                INTROSPECTION_URL,
+                data={"client_id": self.client_id, "client_secret": self.client_secret, "token": access_token},
+                timeout=self.timeout_seconds,
+            )
+        except requests.Timeout as exc:
+            raise LinkedInOAuthError("LinkedIn token introspection timed out.") from exc
+        if response.status_code != 200:
+            raise LinkedInOAuthError("LinkedIn token introspection failed.")
+        try:
+            payload = response.json()
+        except (ValueError, TypeError) as exc:
+            raise LinkedInOAuthError("LinkedIn token introspection response is malformed.") from exc
+        if not isinstance(payload, dict) or payload.get("active") is not True:
+            raise LinkedInOAuthError("LinkedIn token introspection returned an inactive token.")
+        if str(payload.get("client_id") or "") != self.client_id:
+            raise LinkedInOAuthError("LinkedIn token introspection client mismatch.")
+        return normalize_linkedin_scopes(payload.get("scope"))
 
     def fetch_userinfo(self, access_token: str) -> dict[str, Any]:
         """Resolve OIDC identity from LinkedIn's official userinfo endpoint."""
@@ -246,6 +322,10 @@ class LinkedInOAuthClient:
                 expires_in=int(payload["expires_in"]) if payload.get("expires_in") is not None else None,
                 scope=str(payload["scope"]),
                 id_token=str(payload["id_token"]) if payload.get("id_token") else None,
+                scope_field_present=bool(payload.get("scope_field_present", True)),
+                raw_scope_type=str(payload.get("raw_scope_type", "str")),
+                scope_source=str(payload.get("scope_source", "token_response")),
+                introspection_attempted=bool(payload.get("introspection_attempted", False)),
             )
         except (OSError, InvalidToken, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise LinkedInOAuthError("Stored LinkedIn OAuth tokens could not be decrypted.") from exc

@@ -9,7 +9,9 @@ from integrations.linkedin_oauth_client import (
     LINKEDIN_SCOPES,
     LinkedInOAuthClient,
     LinkedInOAuthError,
+    normalize_linkedin_scopes,
 )
+import requests
 
 
 KEY = "J7m8v5Tq8nYx3V4r8J5p6Qw7E2s1L9a0B6c4D8e2F7g="
@@ -69,3 +71,76 @@ def test_missing_encryption_key_is_rejected(tmp_path: Path) -> None:
             client_id="id", client_secret="secret", redirect_uri="uri",
             encryption_key="", token_path=tmp_path / "tokens",
         )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("openid profile w_member_social", {"openid", "profile", "w_member_social"}),
+        ("openid+profile+w_member_social", {"openid", "profile", "w_member_social"}),
+        ("openid%20profile%20w_member_social", {"openid", "profile", "w_member_social"}),
+        ("openid,profile,w_member_social", {"openid", "profile", "w_member_social"}),
+        ("  openid   profile\t w_member_social  ", {"openid", "profile", "w_member_social"}),
+        (["openid", "profile", "w_member_social"], {"openid", "profile", "w_member_social"}),
+        (("w_member_social", "profile", "openid"), {"openid", "profile", "w_member_social"}),
+        (None, set()),
+    ],
+)
+def test_scope_normalization(raw: object, expected: set[str]) -> None:
+    assert normalize_linkedin_scopes(raw) == expected
+
+
+class IntrospectionHTTP:
+    def __init__(self, payload: dict[str, object] | None = None, *, timeout: bool = False) -> None:
+        self.payload = payload or {}
+        self.timeout = timeout
+        self.calls: list[str] = []
+
+    def post(self, url: str, **_kwargs: object) -> SimpleNamespace:
+        self.calls.append(url)
+        if len(self.calls) == 1:
+            return SimpleNamespace(status_code=200, json=lambda: {"access_token": "access", "expires_in": 3600})
+        if self.timeout:
+            raise requests.Timeout("redacted")
+        return SimpleNamespace(status_code=200, json=lambda: self.payload)
+
+
+def test_missing_scope_uses_introspection(tmp_path: Path) -> None:
+    http = IntrospectionHTTP({"active": True, "client_id": "client-id", "scope": "openid,profile,w_member_social"})
+    oauth = make_client(tmp_path)
+    oauth.http_session = http
+    tokens = oauth.exchange_code("code", persist_tokens=False)
+    assert normalize_linkedin_scopes(tokens.scope) == set(LINKEDIN_SCOPES)
+    assert tokens.introspection_attempted is True
+    assert tokens.scope_field_present is False
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"active": False, "client_id": "client-id", "scope": "openid,profile,w_member_social"}, "inactive"),
+        ({"active": True, "client_id": "different", "scope": "openid,profile,w_member_social"}, "client mismatch"),
+    ],
+)
+def test_introspection_rejects_invalid_result(tmp_path: Path, payload: dict[str, object], message: str) -> None:
+    oauth = make_client(tmp_path)
+    oauth.http_session = IntrospectionHTTP(payload)
+    with pytest.raises(LinkedInOAuthError, match=message):
+        oauth.exchange_code("code", persist_tokens=False)
+
+
+def test_introspection_timeout_is_controlled(tmp_path: Path) -> None:
+    oauth = make_client(tmp_path)
+    oauth.http_session = IntrospectionHTTP(timeout=True)
+    with pytest.raises(LinkedInOAuthError, match="timed out"):
+        oauth.exchange_code("code", persist_tokens=False)
+
+
+@pytest.mark.parametrize("scope", ["profile w_member_social", "openid w_member_social", "openid profile"])
+def test_genuine_missing_scope_remains_missing(scope: str) -> None:
+    assert set(LINKEDIN_SCOPES).difference(normalize_linkedin_scopes(scope))
+
+
+def test_unexpected_scope_is_preserved_for_diagnostics() -> None:
+    scopes = normalize_linkedin_scopes("w_member_social openid extra profile")
+    assert scopes.difference(LINKEDIN_SCOPES) == {"extra"}

@@ -17,6 +17,8 @@ from integrations.linkedin_oauth_client import (
     LinkedInOAuthError,
     LinkedInOAuthStateStore,
     LinkedInTokenSet,
+    normalize_linkedin_scopes,
+    serialize_linkedin_scopes,
 )
 
 
@@ -46,7 +48,7 @@ class LinkedInCredentialStore:
         subject = str(identity.get("sub") or "").strip()
         if not subject:
             raise LinkedInOAuthError("LinkedIn identity could not be validated.")
-        scopes = set(tokens.scope.split())
+        scopes = normalize_linkedin_scopes(tokens.scope)
         if set(LINKEDIN_SCOPES) - scopes:
             missing = ", ".join(sorted(set(LINKEDIN_SCOPES) - scopes))
             raise LinkedInOAuthError(f"LinkedIn authorization did not grant required scopes: {missing}.")
@@ -141,6 +143,21 @@ def complete_linkedin_callback(
         if state_row["redirect_uri"] and state_row["redirect_uri"] != oauth_client.redirect_uri:
             raise LinkedInOAuthError("LinkedIn callback redirect mismatch.")
         tokens = oauth_client.exchange_code(params["code"], persist_tokens=False)
+        granted_scopes = normalize_linkedin_scopes(tokens.scope)
+        missing_scopes = set(LINKEDIN_SCOPES).difference(granted_scopes)
+        unexpected_scopes = granted_scopes.difference(LINKEDIN_SCOPES)
+        states.record_scope_diagnostics(
+            state_row["id"],
+            granted_scopes=serialize_linkedin_scopes(granted_scopes),
+            missing_scopes=serialize_linkedin_scopes(missing_scopes),
+            unexpected_scopes=serialize_linkedin_scopes(unexpected_scopes),
+            raw_scope_type=tokens.raw_scope_type,
+            scope_field_present=tokens.scope_field_present,
+            introspection_attempted=tokens.introspection_attempted,
+        )
+        if missing_scopes:
+            missing = ", ".join(sorted(missing_scopes))
+            raise LinkedInOAuthError(f"LinkedIn authorization did not grant required scopes: {missing}.")
         identity = oauth_client.fetch_userinfo(tokens.access_token)
         result = credentials.save(tokens, identity)
         return {"status": "connected", "state_id": state_row["id"], **result, "browser_html": browser_result(True)}
@@ -153,9 +170,9 @@ def complete_linkedin_callback(
         elif "scope" in message:
             reason, stage = "required_scope_missing", "scope_validation"
             if "required scopes:" in message:
-                missing_scopes = message.split("required scopes:", 1)[1].rstrip(".").strip()
-                if missing_scopes:
-                    reason = f"required_scope_missing:{missing_scopes}"
+                missing_scope_text = message.split("required scopes:", 1)[1].rstrip(".").strip()
+                if missing_scope_text:
+                    reason = f"required_scope_missing:{missing_scope_text}"
         elif "encrypt" in message or "fernet" in message:
             reason, stage = "token_encryption_failed", "encryption"
         elif "identity" not in message and "userinfo" not in message:

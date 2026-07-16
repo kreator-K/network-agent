@@ -870,7 +870,13 @@ def _migrate_linkedin_oauth_columns(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE linkedin_oauth_states ADD COLUMN requested_scopes TEXT NOT NULL DEFAULT 'openid profile w_member_social'")
     if "redirect_uri" not in state_columns:
         connection.execute("ALTER TABLE linkedin_oauth_states ADD COLUMN redirect_uri TEXT NOT NULL DEFAULT ''")
-    for column, definition in (("correlation_id", "TEXT"), ("failure_stage", "TEXT"), ("error_summary", "TEXT")):
+    for column, definition in (
+        ("correlation_id", "TEXT"), ("failure_stage", "TEXT"), ("error_summary", "TEXT"),
+        ("granted_scopes", "TEXT"), ("missing_scopes", "TEXT"),
+        ("unexpected_scopes", "TEXT"), ("raw_scope_type", "TEXT"),
+        ("scope_field_present", "INTEGER"),
+        ("introspection_attempted", "INTEGER NOT NULL DEFAULT 0"),
+    ):
         if column not in state_columns:
             connection.execute(f"ALTER TABLE linkedin_oauth_states ADD COLUMN {column} {definition}")
     credential_columns = {row[1] for row in connection.execute("PRAGMA table_info(linkedin_credentials)")}

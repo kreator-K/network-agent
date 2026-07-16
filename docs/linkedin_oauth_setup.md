@@ -15,6 +15,13 @@ In the LinkedIn Developer Portal, create an application, configure the exact
 HTTPS redirect URI, and request only the three allowlisted scopes. Approval of
 `w_member_social` does not enable posting in this phase.
 
+The products are separate: **Sign In with LinkedIn using OpenID Connect**
+supplies `openid` and `profile`, while **Share on LinkedIn** supplies
+`w_member_social`. Confirm the app's Auth tab lists all three permissions.
+Seeing a scope in the generated authorization URL proves only that it was
+requested; the callback accepts only permissions actually granted in the token
+response or verified by LinkedIn token introspection.
+
 Run the callback adapter with `.venv/bin/python scripts/run_linkedin_callback.py`
 behind an HTTPS reverse proxy, and run the Telegram bot separately with
 `.venv/bin/python scripts/run_bot.py`. The callback stores only encrypted
