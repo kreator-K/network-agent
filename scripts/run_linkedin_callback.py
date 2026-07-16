@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agents.orchestrator import NetworkOrchestrator
 from config.settings import settings
+from db.database import initialize_database
 
 
 class CallbackHandler(BaseHTTPRequestHandler):
@@ -27,8 +28,14 @@ class CallbackHandler(BaseHTTPRequestHandler):
             result = NetworkOrchestrator().complete_linkedin_authorization(params, database=settings.database_path)
             body = str(result["browser_html"]).encode("utf-8")
             self.send_response(200)
-        except Exception:
-            body = b"<!doctype html><html><body><p>LinkedIn authorization failed or expired. Nothing was published.</p></body></html>"
+        except Exception as exc:
+            reference = ""
+            marker = "LI-OAUTH-"
+            text = str(exc)
+            if marker in text:
+                reference = text[text.index(marker):].split(":", 1)[0]
+            suffix = f"<p>Reference: {reference}</p>" if reference else ""
+            body = ("<!doctype html><html><body><p>LinkedIn authorization could not be completed.</p>" + suffix + "<p>Return to Telegram and run /linkedin_connect again.</p></body></html>").encode("utf-8")
             self.send_response(400)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
@@ -39,4 +46,5 @@ class CallbackHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    initialize_database(settings.database_path)
     HTTPServer(("127.0.0.1", 8080), CallbackHandler).serve_forever()

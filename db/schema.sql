@@ -466,6 +466,9 @@ CREATE TABLE IF NOT EXISTS linkedin_oauth_states (
     consumed_at TEXT,
     requested_scopes TEXT NOT NULL DEFAULT 'openid profile w_member_social',
     redirect_uri TEXT NOT NULL DEFAULT '',
+    correlation_id TEXT,
+    failure_stage TEXT,
+    error_summary TEXT,
     CHECK (status IN ('pending', 'consumed', 'expired', 'cancelled', 'failed'))
 );
 

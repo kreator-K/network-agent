@@ -156,7 +156,7 @@ async def linkedin_oauth_history(update: Any, context: Any) -> None:
     except NetworkOrchestratorError:
         await _reply(update, "LinkedIn authorization history is unavailable.")
         return
-    await _reply(update, "No LinkedIn authorization attempts yet." if not rows else "\n".join(f"{row['created_at']} | {row['status']} | scopes={row['requested_scopes']}" for row in rows))
+    await _reply(update, "No LinkedIn authorization attempts yet." if not rows else "\n".join(f"{row['created_at']} | {row['status']} | stage={row.get('failure_stage') or 'completed'} | reason={row.get('error_summary') or 'none'} | ref={row.get('correlation_id') or 'none'}" for row in rows))
 
 
 async def linkedin_publish_status(update: Any, context: Any) -> None:

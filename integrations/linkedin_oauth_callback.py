@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import secrets
 from datetime import UTC, datetime, timedelta
 from html import escape
 from typing import Any, Mapping
@@ -27,6 +28,10 @@ def browser_result(success: bool) -> str:
     return f"<!doctype html><html><body><p>{escape(message)}</p></body></html>"
 
 
+def browser_failure(reference: str) -> str:
+    return f"<!doctype html><html><body><p>LinkedIn authorization could not be completed.</p><p>Reference: {escape(reference)}</p><p>Return to Telegram and run /linkedin_connect again.</p></body></html>"
+
+
 class LinkedInCredentialStore:
     """Encrypt and atomically persist the minimum LinkedIn credential data."""
 
@@ -43,7 +48,8 @@ class LinkedInCredentialStore:
             raise LinkedInOAuthError("LinkedIn identity could not be validated.")
         scopes = set(tokens.scope.split())
         if set(LINKEDIN_SCOPES) - scopes:
-            raise LinkedInOAuthError("LinkedIn authorization did not grant required scopes.")
+            missing = ", ".join(sorted(set(LINKEDIN_SCOPES) - scopes))
+            raise LinkedInOAuthError(f"LinkedIn authorization did not grant required scopes: {missing}.")
         now = datetime.now(UTC)
         expiry = (now + timedelta(seconds=tokens.expires_in)).isoformat() if tokens.expires_in else None
         access = self.fernet.encrypt(tokens.access_token.encode("utf-8"))
@@ -130,6 +136,7 @@ def complete_linkedin_callback(
         raise LinkedInOAuthError("LinkedIn authorization failed or expired.")
     states = LinkedInOAuthStateStore(connection)
     state_row = states.consume(state)
+    correlation_id = "LI-OAUTH-" + secrets.token_hex(6)
     try:
         if state_row["redirect_uri"] and state_row["redirect_uri"] != oauth_client.redirect_uri:
             raise LinkedInOAuthError("LinkedIn callback redirect mismatch.")
@@ -137,6 +144,17 @@ def complete_linkedin_callback(
         identity = oauth_client.fetch_userinfo(tokens.access_token)
         result = credentials.save(tokens, identity)
         return {"status": "connected", "state_id": state_row["id"], **result, "browser_html": browser_result(True)}
-    except Exception:
-        states.mark_failed(state_row["id"])
-        raise
+    except Exception as exc:
+        reason = "oidc_identity_invalid"
+        stage = "identity_validation"
+        message = str(exc).lower()
+        if "token exchange" in message or "token response" in message:
+            reason, stage = "token_exchange_failed", "token_exchange"
+        elif "scope" in message:
+            reason, stage = "required_scope_missing", "scope_validation"
+        elif "encrypt" in message or "fernet" in message:
+            reason, stage = "token_encryption_failed", "encryption"
+        elif "identity" not in message and "userinfo" not in message:
+            reason, stage = "credential_persistence_failed", "persistence"
+        states.mark_failed(state_row["id"], stage=stage, reason=reason, correlation_id=correlation_id)
+        raise LinkedInOAuthError(f"{reason}:{correlation_id}") from exc

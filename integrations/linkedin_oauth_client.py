@@ -112,10 +112,10 @@ class LinkedInOAuthStateStore:
         self.connection.commit()
         return result.rowcount
 
-    def mark_failed(self, state_id: int) -> None:
+    def mark_failed(self, state_id: int, *, stage: str = "callback", reason: str = "oauth_callback_failed", correlation_id: str | None = None) -> None:
         self.connection.execute(
-            "UPDATE linkedin_oauth_states SET status='failed' WHERE id=? AND status='consumed'",
-            (state_id,),
+            "UPDATE linkedin_oauth_states SET status='failed', failure_stage=?, error_summary=?, correlation_id=? WHERE id=? AND status='consumed'",
+            (stage[:80], reason[:240], correlation_id, state_id),
         )
         self.connection.commit()
 
@@ -129,7 +129,7 @@ class LinkedInOAuthStateStore:
 
     def history(self, limit: int = 10) -> list[dict[str, Any]]:
         rows = self.connection.execute(
-            "SELECT id, status, requested_scopes, created_at, expires_at, consumed_at FROM linkedin_oauth_states ORDER BY id DESC LIMIT ?",
+            "SELECT id, status, requested_scopes, created_at, expires_at, consumed_at, failure_stage, error_summary, correlation_id FROM linkedin_oauth_states ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
