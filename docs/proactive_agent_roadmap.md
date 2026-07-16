@@ -13,7 +13,9 @@
 - Phase 8G-B3 — Richer LinkedIn Content Formats: completed through automated and mocked acceptance
 - Phase 8G-B4 — LinkedIn release hardening: completed through automated, disabled-mode, mock-mode, and local read-only certification
 - Phase 8G — completed; no live write was performed without package-specific confirmation
-- Phase 9 — Full Integration and Release Hardening: not_started
+- Phase 9 — Full Integration and Release Hardening: completed; release gate,
+  deterministic cross-workflow regression, operational runbooks, backup and
+  restore checks, and safe command inventory passed certification
 - Phase 10 — Deployment Readiness and Private Beta: not_started
 
 LinkedIn architecture: `NetworkOrchestrator` -> `LinkedInPublishingGateway`

@@ -108,6 +108,18 @@ python -m mypy .
 python -m ruff check .
 ```
 
+Phase 9 release checks may also be run with:
+
+```bash
+python scripts/release_check.py
+```
+
+This gate is local and provider-write-free. It validates configuration,
+command registration, tracked-file secret patterns, SQLite migration and
+read-only integrity, then runs the required test, type, and lint commands.
+Real LinkedIn publishing remains disabled unless a separately approved,
+package-specific live test explicitly changes both publishing switches.
+
 If these are missing, create the closest equivalent scripts.
 
 ## Final Response Rule for Codex

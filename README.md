@@ -91,6 +91,7 @@ retried automatically.
 .venv/bin/python -m pytest
 .venv/bin/python -m mypy .
 .venv/bin/python -m ruff check .
+.venv/bin/python scripts/release_check.py
 ```
 
 Phase 8G certification uses mocked provider writes plus local read-only OAuth
@@ -99,3 +100,11 @@ status checks. No real LinkedIn post or media upload is part of automated tests.
 See [Phase 8G certification](docs/phase8g_complete_certification.md),
 [LinkedIn publish safety](docs/linkedin_publish_safety.md), and the
 [MVP release checklist](docs/mvp_release_checklist.md) for operational details.
+
+Phase 9 release operations are documented in
+[the operator runbook](docs/operator_runbook.md), with a no-provider-write
+gate available through `scripts/release_check.py`. The gate verifies the
+active local configuration, generated Telegram command reference, tracked-file
+secret patterns, SQLite migration/integrity, pytest, mypy, and Ruff. Use
+`scripts/backup_database.py` and `scripts/verify_backup.py` for the documented
+temporary backup/restore check.

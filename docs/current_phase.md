@@ -32,4 +32,13 @@ Phase 8G-B4 — Production Publishing Hardening: completed through automated, di
 
 Phase 8G: completed. No live provider write was performed; each real write still requires explicit confirmation for a specific frozen package.
 
-Phase 9: not started.
+Phase 9 — Whole-System Integration and Release Hardening: completed.
+
+The release-hardening pass adds safe configuration diagnostics, generated
+Telegram command inventory, bounded background operation handling, SQLite
+backup/restore verification, release checks, and operator runbooks. The full
+release gate passed with 409 tests, mypy across 78 files, Ruff, migration, and
+integrity checks. Real LinkedIn publishing remains disabled and no provider
+write is part of the release certification.
+
+Phase 10: not started.

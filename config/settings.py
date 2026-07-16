@@ -94,6 +94,12 @@ class Settings:
     public_signal_max_redirects: int = int(
         os.getenv("PUBLIC_SIGNAL_MAX_REDIRECTS", "3")
     )
+    background_operation_timeout_seconds: int = int(
+        os.getenv("BACKGROUND_OPERATION_TIMEOUT_SECONDS", "120")
+    )
+    max_background_operations: int = int(
+        os.getenv("MAX_BACKGROUND_OPERATIONS", "2")
+    )
 
 
 settings = Settings()

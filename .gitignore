@@ -9,3 +9,6 @@ credentials*.json
 token*.json
 *.pem
 vendor/google-calendar-mcp/node_modules/
+backups/
+logs/
+*.log

@@ -1,5 +1,6 @@
 """Thin Telegram command handlers for Network Growth Agent."""
 
+import asyncio
 import logging
 import json
 import shlex
@@ -851,10 +852,21 @@ async def scan_signal_source(update: Any, context: Any) -> None:
 
 async def scan_signals(update: Any, context: Any) -> None:
     """Manually scan all approved enabled sources without scheduling."""
+    await _reply(update, "Signal scan started. I’ll send the result when it finishes.")
     try:
-        result = _orchestrator(context).scan_enabled_signal_sources(
-            database=_database(context)
+        result = await _run_bounded_operation(
+            context,
+            "scan_signals",
+            lambda: _orchestrator(context).scan_enabled_signal_sources(
+                database=_database(context)
+            ),
         )
+    except BackgroundOperationBusy:
+        await _reply(update, "A signal scan is already running. Please check back shortly.")
+        return
+    except asyncio.TimeoutError:
+        await _reply(update, "Signal scan timed out. Check the logs and try again later.")
+        return
     except NetworkOrchestratorError:
         await _reply(update, "Could not scan enabled signal sources.")
         return
@@ -919,8 +931,21 @@ async def score_signals(update: Any, context: Any) -> None:
     if limit is None or limit < 1:
         await _reply(update, "Usage: /score_signals [positive_limit]")
         return
+    await _reply(update, "Signal evaluation started. I’ll send the result when it finishes.")
     try:
-        result = _orchestrator(context).score_recent_signals(limit=limit, force=force, database=_database(context))
+        result = await _run_bounded_operation(
+            context,
+            "score_signals",
+            lambda: _orchestrator(context).score_recent_signals(
+                limit=limit, force=force, database=_database(context)
+            ),
+        )
+    except BackgroundOperationBusy:
+        await _reply(update, "Signal evaluation is already running. Please check back shortly.")
+        return
+    except asyncio.TimeoutError:
+        await _reply(update, "Signal evaluation timed out. Check the logs and try again later.")
+        return
     except NetworkOrchestratorError:
         await _reply(update, "Could not score stored signals right now.")
         return
@@ -1459,6 +1484,25 @@ async def _reply(
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> None:
     await update.effective_message.reply_text(text, reply_markup=reply_markup)
+
+
+class BackgroundOperationBusy(RuntimeError):
+    """Raised when the bounded Telegram background-work pool is full."""
+
+
+async def _run_bounded_operation(context: Any, name: str, operation: Any) -> Any:
+    """Run blocking orchestration off the Telegram event loop with bounds."""
+    active = context.application.bot_data.setdefault("background_operations", set())
+    if name in active or len(active) >= settings.max_background_operations:
+        raise BackgroundOperationBusy("A similar operation is already running.")
+    active.add(name)
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(operation),
+            timeout=settings.background_operation_timeout_seconds,
+        )
+    finally:
+        active.discard(name)
 
 
 def _none_if_empty(value: str) -> str | None:
@@ -2341,7 +2385,10 @@ async def _save_largest_photo(update: Any) -> str:
 
 
 def _format_system_check(result: dict[str, Any]) -> str:
-    lines = [f"System check overall_passed={result['overall_passed']}"]
+    lines = [
+        f"System check: {result.get('overall_status', 'PASS')} "
+        f"(overall_passed={result['overall_passed']})"
+    ]
     for check in result["checks"]:
         if check.get("violations"):
             lines.append(f"{check['check']}: violations={check['violations']}")

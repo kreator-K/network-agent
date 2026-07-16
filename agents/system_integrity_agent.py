@@ -719,7 +719,10 @@ class SystemIntegrityAgent:
             self.check_content_package_integrity(database),
             self.check_linkedin_publish_integrity(database),
         ]
+        for check in checks:
+            check["status"] = "PASS" if check["passed"] and not check.get("notes") else "WARN" if check["passed"] else "FAIL"
         overall_passed = all(bool(check["passed"]) for check in checks)
+        overall_status = "FAIL" if not overall_passed else "WARN" if any(check["status"] == "WARN" for check in checks) else "PASS"
         failed_count = sum(1 for check in checks if not check["passed"])
         summary = (
             "All integrity checks passed."
@@ -728,6 +731,7 @@ class SystemIntegrityAgent:
         )
         return {
             "overall_passed": overall_passed,
+            "overall_status": overall_status,
             "checks": checks,
             "summary": summary,
             "checked_at": datetime.now(UTC).isoformat(),

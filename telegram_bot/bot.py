@@ -13,6 +13,7 @@ from telegram.ext import (
 )
 
 from config.settings import settings
+from config.diagnostics import configuration_diagnostics
 from agents.calendar_agent import CalendarAgent
 from agents.orchestrator import NetworkOrchestrator
 from db.database import initialize_database
@@ -44,6 +45,7 @@ def build_bot() -> Application:
         .build()
     )
     application.bot_data["database_path"] = settings.database_path
+    application.bot_data["configuration_diagnostics"] = configuration_diagnostics()
     application.bot_data["orchestrator"] = NetworkOrchestrator(
         calendar_agent=CalendarAgent(Path(settings.database_path))
     )
