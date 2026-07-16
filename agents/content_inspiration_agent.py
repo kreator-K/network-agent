@@ -348,7 +348,35 @@ class ContentInspirationAgent:
         identity = str(profile.get("professional_identity") or "a thoughtful technology professional")
         personal_angle = PersonalAngle(angle_type="professional_identity", text=identity, verified=False)
         summary = str(source["summary"] or source["title"])
-        primary = f"{opportunity['headline']}\n\n{summary}\n\nMy takeaway: {opportunity['suggested_angle']}\n\nFor {opportunity['target_audience']}, the useful move is to separate the reported fact from the product decision it invites."
+        title = str(source["title"])
+        if "ai" in title.lower() or "artificial intelligence" in summary.lower():
+            practical_lens = (
+                "For AI product teams, capability is only the starting point. "
+                "The harder work is defining edge cases, evaluation criteria, "
+                "and the consequence of a wrong decision."
+            )
+            closing_question = (
+                "What evidence would you require before letting the system "
+                "influence a consequential decision?"
+            )
+        else:
+            practical_lens = (
+                f"For {opportunity['target_audience']}, the useful move is to "
+                "separate what the source reports from the product or strategy "
+                "decision it may change."
+            )
+            closing_question = (
+                "Which assumption would you test before turning this signal into "
+                "a roadmap decision?"
+            )
+        primary = (
+            f"{title}\n\n{summary}\n\n{practical_lens}\n\n"
+            "A practical review starts with three questions:\n"
+            "1. What is directly supported by the source?\n"
+            "2. Which boundary cases matter most?\n"
+            "3. What would change the current decision?\n\n"
+            f"{closing_question}"
+        )
         claim = FactualClaim(id="claim-1", claim_text=str(source["title"]), source_signal_ids=[int(source["id"])], confidence=0.8, directly_supported=True, softened=True, risk_note="Use source-linked wording and avoid unsupported prediction.")
         hooks = [AlternativeHook(text=f"What {source['title']} means for product judgment", rationale="Analytical product hook."), AlternativeHook(text="A useful distinction before turning this signal into strategy", rationale="Avoids generic source summary.")]
         risk = ContentRiskAssessment(factual_risk=float(opportunity["factual_risk"]), generic_content_risk=float(opportunity["generic_commentary_risk"]), notes=["Source-linked claim only."], validation_passed=True)

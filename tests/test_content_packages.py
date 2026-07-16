@@ -45,6 +45,8 @@ def test_selected_opportunity_creates_source_traced_package(tmp_path: Path) -> N
     assert post.source_references_json
     assert post.profile_version == 1
     assert post.scoring_config_version == 1
+    assert "A practical review starts with three questions" in post.draft_text
+    assert "My takeaway: Analyze" not in post.draft_text
 
 
 def test_mock_image_package_has_alt_text(tmp_path: Path) -> None:
