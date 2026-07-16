@@ -17,3 +17,20 @@ def test_readiness_reports_database_failure_without_details(monkeypatch) -> None
     assert status == 503
     assert payload == {"status": "not_ready", "reason": "local_dependency_unavailable"}
     assert "private" not in repr(payload)
+
+
+def test_main_closes_server_cleanly_on_keyboard_interrupt(monkeypatch) -> None:
+    class Server:
+        closed = False
+
+        def serve_forever(self) -> None:
+            raise KeyboardInterrupt
+
+        def server_close(self) -> None:
+            self.closed = True
+
+    server = Server()
+    monkeypatch.setattr(run_linkedin_callback, "initialize_database", lambda _path: None)
+    monkeypatch.setattr(run_linkedin_callback, "HTTPServer", lambda *_args: server)
+    assert run_linkedin_callback.main() == 0
+    assert server.closed is True

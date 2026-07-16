@@ -86,6 +86,18 @@ class CallbackHandler(BaseHTTPRequestHandler):
         return
 
 
-if __name__ == "__main__":
+def main() -> int:
+    """Run the callback adapter and close its listening socket on Ctrl+C."""
     initialize_database(settings.database_path)
-    HTTPServer((settings.callback_host, settings.callback_port), CallbackHandler).serve_forever()
+    server = HTTPServer((settings.callback_host, settings.callback_port), CallbackHandler)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        logger.info("LinkedIn callback shutdown requested.")
+    finally:
+        server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
