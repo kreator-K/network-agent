@@ -1171,8 +1171,14 @@ async def revise_content(update: Any, context: Any) -> None:
     if post_id is None or len(parts) < 2:
         await _reply(update, "Usage: /revise_content <post_id> <revision_type> [notes]")
         return
+    revision_notes = parts[2] if len(parts) > 2 else None
     try:
-        post = _orchestrator(context).revise_content_package(post_id=post_id, revision_type=parts[1], database=_database(context))
+        post = _orchestrator(context).revise_content_package(
+            post_id=post_id,
+            revision_type=parts[1],
+            revision_notes=revision_notes,
+            database=_database(context),
+        )
     except NetworkOrchestratorError:
         await _reply(update, "Could not revise that package. Check the ID and revision type.")
         return
@@ -1946,7 +1952,10 @@ async def _handle_package_callback(query: Any, context: Any, data: str) -> None:
         elif action in {"package_personal", "package_analytical", "package_concise", "package_funny"}:
             revision = {"package_personal": "make_more_personal", "package_analytical": "make_more_analytical", "package_concise": "make_more_concise", "package_funny": "make_funnier"}[action]
             post = orchestrator.revise_content_package(
-                post_id=post_id, revision_type=revision, database=_database(context)
+                post_id=post_id,
+                revision_type=revision,
+                revision_notes=None,
+                database=_database(context),
             )
             await query.edit_message_text(_format_content_package(post))
             return

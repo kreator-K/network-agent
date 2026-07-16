@@ -172,7 +172,7 @@ Edge cases:
 ## ContentInspirationAgent
 
 Purpose:
-Draft LinkedIn post concepts and copy inspired by high-engagement creator patterns in similar niches, without copying source material.
+Draft LinkedIn post concepts and copy inspired by high-engagement creator patterns in similar niches, without copying source material. This agent also owns the storytelling/editor responsibility; no separate StorytellerAgent exists.
 
 Inputs:
 - User topic, notes, thesis, or draft.
@@ -183,6 +183,8 @@ Inputs:
 
 Outputs:
 - Draft LinkedIn post.
+- Cohesive whole-post narrative revisions that materially change the copy rather than append canned text.
+- Immutable text and package snapshots for every content-package version.
 - Optional image-generation prompt or image selection decision.
 - Explanation of which user-provided inputs were used.
 
@@ -198,6 +200,7 @@ Edge cases:
 - Post claims credentials or outcomes the user has not stated.
 - User tries to publish without approval.
 - Image generation is unavailable in mock mode.
+- Model revision output is unavailable or unchanged; use a whole-post deterministic fallback and do not advance the version unless the narrative materially changes.
 
 ## CalendarAgent
 

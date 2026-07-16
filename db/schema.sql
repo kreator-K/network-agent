@@ -312,6 +312,22 @@ CREATE TABLE IF NOT EXISTS content_posts (
     CHECK (package_version >= 1)
 );
 
+CREATE TABLE IF NOT EXISTS content_post_versions (
+    id INTEGER PRIMARY KEY,
+    content_post_id INTEGER NOT NULL REFERENCES content_posts(id) ON DELETE CASCADE,
+    package_version INTEGER NOT NULL,
+    draft_text TEXT NOT NULL,
+    package_json TEXT NOT NULL,
+    revision_type TEXT NOT NULL,
+    revision_notes TEXT,
+    model_mode TEXT NOT NULL,
+    fallback_used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE (content_post_id, package_version),
+    CHECK (package_version >= 1),
+    CHECK (fallback_used IN (0, 1))
+);
+
 CREATE TABLE IF NOT EXISTS calendar_blocks (
     id INTEGER PRIMARY KEY,
     prospect_id INTEGER NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
@@ -451,6 +467,8 @@ CREATE INDEX IF NOT EXISTS idx_refinement_proposals_run_id
 CREATE INDEX IF NOT EXISTS idx_refinement_proposals_status
     ON refinement_proposals(status);
 CREATE INDEX IF NOT EXISTS idx_content_posts_status ON content_posts(status);
+CREATE INDEX IF NOT EXISTS idx_content_post_versions_post_version
+    ON content_post_versions(content_post_id, package_version DESC);
 CREATE INDEX IF NOT EXISTS idx_briefing_runs_scheduled_for ON briefing_runs(scheduled_for DESC);
 CREATE INDEX IF NOT EXISTS idx_prospect_candidates_status_score ON prospect_candidates(status, total_score DESC);
 CREATE INDEX IF NOT EXISTS idx_calendar_blocks_prospect_id ON calendar_blocks(prospect_id);

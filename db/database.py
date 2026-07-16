@@ -47,6 +47,8 @@ def initialize_database(
         _migrate_content_posts_uploaded_image_source(connection)
         _migrate_content_posts_lifecycle_columns(connection)
         _migrate_content_package_columns(connection)
+        _repair_content_post_versions_foreign_key(connection)
+        _seed_content_post_versions(connection)
         _migrate_refinement_outcomes_explicit_columns(connection)
         _migrate_calendar_block_lifecycle_columns(connection)
         _migrate_signal_scoring_columns(connection)
@@ -64,7 +66,7 @@ def initialize_database(
             "INSERT OR IGNORE INTO briefing_settings (id, updated_at) VALUES (1, ?)",
             (_utc_now(),),
         )
-        connection.execute("PRAGMA user_version = 11")
+        connection.execute("PRAGMA user_version = 12")
 
 
 def canonical_signal_scoring_config_json(config: dict[str, Any]) -> str:
@@ -559,6 +561,7 @@ def _migrate_content_posts_uploaded_image_source(
         """
         DROP INDEX IF EXISTS idx_content_posts_status;
 
+        PRAGMA legacy_alter_table = ON;
         ALTER TABLE content_posts RENAME TO content_posts_legacy;
 
         CREATE TABLE content_posts (
@@ -599,6 +602,7 @@ def _migrate_content_posts_uploaded_image_source(
         FROM content_posts_legacy;
 
         DROP TABLE content_posts_legacy;
+        PRAGMA legacy_alter_table = OFF;
 
         CREATE INDEX IF NOT EXISTS idx_content_posts_status
             ON content_posts(status);
@@ -635,6 +639,7 @@ def _migrate_content_posts_lifecycle_columns(connection: sqlite3.Connection) -> 
         f"""
         DROP INDEX IF EXISTS idx_content_posts_status;
 
+        PRAGMA legacy_alter_table = ON;
         ALTER TABLE content_posts RENAME TO content_posts_legacy;
 
         CREATE TABLE content_posts (
@@ -691,6 +696,7 @@ def _migrate_content_posts_lifecycle_columns(connection: sqlite3.Connection) -> 
         WHERE status != 'posted';
 
         DROP TABLE content_posts_legacy;
+        PRAGMA legacy_alter_table = OFF;
 
         CREATE INDEX IF NOT EXISTS idx_content_posts_status
             ON content_posts(status);
@@ -723,6 +729,99 @@ def _migrate_content_package_columns(connection: sqlite3.Connection) -> None:
             connection.execute(
                 f"ALTER TABLE content_posts ADD COLUMN {column_name} {column_type}"
             )
+
+
+def _seed_content_post_versions(connection: sqlite3.Connection) -> None:
+    """Backfill one immutable baseline for package rows created before v12."""
+    if not _column_names(connection, "content_post_versions"):
+        return
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO content_post_versions (
+            content_post_id,
+            package_version,
+            draft_text,
+            package_json,
+            revision_type,
+            revision_notes,
+            model_mode,
+            fallback_used,
+            created_at
+        )
+        SELECT
+            id,
+            package_version,
+            draft_text,
+            package_json,
+            'baseline',
+            NULL,
+            'legacy',
+            0,
+            COALESCE(updated_at, created_at, ?)
+        FROM content_posts
+        WHERE package_json IS NOT NULL
+        """,
+        (_utc_now(),),
+    )
+
+
+def _repair_content_post_versions_foreign_key(
+    connection: sqlite3.Connection,
+) -> None:
+    """Repair version-history FKs rewritten during legacy content migrations."""
+    foreign_keys = connection.execute(
+        "PRAGMA foreign_key_list(content_post_versions)"
+    ).fetchall()
+    targets = {
+        str(row["table"])
+        for row in foreign_keys
+        if str(row["from"]) == "content_post_id"
+    }
+    if not targets or targets == {"content_posts"}:
+        return
+    if targets != {"content_posts_legacy"}:
+        raise RuntimeError("content_post_versions has an unsupported post foreign key")
+    if connection.in_transaction:
+        connection.commit()
+    connection.execute("PRAGMA foreign_keys = OFF")
+    try:
+        connection.executescript(
+            """
+            BEGIN IMMEDIATE;
+            CREATE TABLE content_post_versions_repaired (
+                id INTEGER PRIMARY KEY,
+                content_post_id INTEGER NOT NULL REFERENCES content_posts(id) ON DELETE CASCADE,
+                package_version INTEGER NOT NULL,
+                draft_text TEXT NOT NULL,
+                package_json TEXT NOT NULL,
+                revision_type TEXT NOT NULL,
+                revision_notes TEXT,
+                model_mode TEXT NOT NULL,
+                fallback_used INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                UNIQUE (content_post_id, package_version),
+                CHECK (package_version >= 1),
+                CHECK (fallback_used IN (0, 1))
+            );
+            INSERT INTO content_post_versions_repaired
+                SELECT * FROM content_post_versions;
+            DROP TABLE content_post_versions;
+            PRAGMA legacy_alter_table = ON;
+            ALTER TABLE content_post_versions_repaired
+                RENAME TO content_post_versions;
+            PRAGMA legacy_alter_table = OFF;
+            CREATE INDEX IF NOT EXISTS idx_content_post_versions_post_version
+                ON content_post_versions(content_post_id, package_version DESC);
+            COMMIT;
+            """
+        )
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(
+                "Foreign-key validation failed after repairing content versions"
+            )
+    finally:
+        connection.execute("PRAGMA foreign_keys = ON")
 
 
 def _migrate_refinement_outcomes_explicit_columns(

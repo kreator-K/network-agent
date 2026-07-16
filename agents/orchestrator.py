@@ -1267,12 +1267,28 @@ class NetworkOrchestrator:
         _ = reason
         return self._update_content_post_status(post_id, "discarded", database=database, method_name="reject_content_package")
 
-    def revise_content_package(self, post_id: int, revision_type: str, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+    def revise_content_package(
+        self,
+        post_id: int,
+        revision_type: str,
+        revision_notes: str | None = None,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
         """Run a controlled revision that preserves package provenance."""
         try:
-            return self.content_inspiration_agent.revise_package(post_id, revision_type, database).model_dump()
+            return self.content_inspiration_agent.revise_package(
+                post_id,
+                revision_type,
+                database,
+                revision_notes=revision_notes,
+            ).model_dump()
         except Exception as exc:
-            _raise_with_context("revise_content_package", {"post_id": post_id, "revision_type": revision_type}, exc)
+            _raise_with_context(
+                "revise_content_package",
+                {"post_id": post_id, "revision_type": revision_type},
+                exc,
+            )
 
     def approve_content_draft_for_later_posting(
         self,

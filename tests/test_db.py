@@ -18,6 +18,7 @@ EXPECTED_TABLES = [
     "briefing_settings",
     "calendar_blocks",
     "content_opportunities",
+    "content_post_versions",
     "content_posts",
     "content_preference_feedback",
     "core_intent",
@@ -264,7 +265,7 @@ def test_init_db_repairs_legacy_content_opportunity_signal_foreign_key(
 
     assert opportunity_targets == {"signals"}
     assert content_post_targets == {"content_opportunities"}
-    assert user_version == 11
+    assert user_version == 12
 
 
 def test_prospect_model_rejects_invalid_status() -> None:
@@ -328,6 +329,26 @@ def test_content_posts_table_created_with_correct_columns(tmp_path: Path) -> Non
         "approved_at",
         "created_at",
         "updated_at",
+    ]
+
+
+def test_content_post_versions_preserve_revision_text_and_metadata(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "network_agent.db"
+    initialize_database(database_path)
+
+    assert _column_names(database_path, "content_post_versions") == [
+        "id",
+        "content_post_id",
+        "package_version",
+        "draft_text",
+        "package_json",
+        "revision_type",
+        "revision_notes",
+        "model_mode",
+        "fallback_used",
+        "created_at",
     ]
 
 

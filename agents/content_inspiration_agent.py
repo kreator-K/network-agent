@@ -2,9 +2,10 @@
 
 import sqlite3
 import json
+from difflib import SequenceMatcher
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from agents.model_orchestration_agent import ModelOrchestrationAgent
 from config.settings import settings
@@ -236,9 +237,22 @@ class ContentInspirationAgent:
                     package.image_alt_text, now, now,
                 ),
             )
+            post_id = _required_lastrowid(cursor)
+            _insert_content_version(
+                connection,
+                content_post_id=post_id,
+                package_version=package.package_version,
+                draft_text=package.primary_post,
+                package_json=_json_dump(package.model_dump()),
+                revision_type="initial_package",
+                revision_notes=None,
+                model_mode="deterministic",
+                fallback_used=False,
+                created_at=now,
+            )
             connection.execute("UPDATE content_opportunities SET status = 'selected', updated_at = ? WHERE id = ?", (now, opportunity_id))
             connection.commit()
-            row = connection.execute("SELECT * FROM content_posts WHERE id = ?", (cursor.lastrowid,)).fetchone()
+            row = connection.execute("SELECT * FROM content_posts WHERE id = ?", (post_id,)).fetchone()
             return _content_post_from_row(row)
         finally:
             if should_close:
@@ -316,27 +330,88 @@ class ContentInspirationAgent:
             blockers.append("Image assets require alt text.")
         return blockers
 
-    def revise_package(self, post_id: int, revision_type: str, database: sqlite3.Connection | str | Path) -> ContentPost:
-        """Apply a bounded deterministic revision while preserving package provenance."""
+    def revise_package(
+        self,
+        post_id: int,
+        revision_type: str,
+        database: sqlite3.Connection | str | Path,
+        revision_notes: str | None = None,
+    ) -> ContentPost:
+        """Rewrite a complete package narrative and preserve every text version."""
         allowed = {"make_more_personal", "make_more_analytical", "make_more_concise", "make_more_practical", "make_lighter", "make_funnier", "reduce_hype", "change_target_audience", "regenerate_hook", "custom_revision"}
         if revision_type not in allowed:
             raise ContentInspirationError("Unsupported content revision type.")
         post = self.get_package(post_id, database)
+        if post.status in {"discarded", "rejected"}:
+            raise ContentInspirationError("Rejected content packages cannot be revised.")
         if revision_type == "make_funnier" and "sensitive" in (post.risk_assessment_json or "").lower():
             raise ContentInspirationError("Humor revision is not allowed for sensitive content.")
+        cleaned_notes = " ".join((revision_notes or "").split()) or None
+        if revision_type == "custom_revision" and cleaned_notes is None:
+            raise ContentInspirationError("Custom revisions require revision notes.")
         package_data = json.loads(post.package_json or "{}")
-        text = post.draft_text
-        suffix = {"make_more_analytical": "\n\nThe useful question is what this changes for product decisions.", "make_more_concise": "", "make_more_personal": "\n\nFrom a learning perspective, this is a useful prompt to examine the trade-off carefully.", "make_lighter": "\n\nA small reminder that product work rarely comes with a spoiler alert.", "make_funnier": "\n\nProduct strategy: where the roadmap politely declines to be simple."}.get(revision_type, "")
-        if revision_type == "make_more_concise":
-            text = text[: max(1, int(len(text) * 0.75))].rstrip()
-        else:
-            text = text + suffix
-        package_data["primary_post"] = text
-        package_data["package_version"] = int(post.package_version) + 1
+        response = self.model_orchestration_agent.run_task(
+            task_type=_revision_task_type(revision_type),
+            prompt=_revision_prompt(post, revision_type, cleaned_notes),
+            expected_schema={"primary_post": str},
+        )
+        candidate = _revision_text(response)
+        fallback_used = bool(response.get("fallback_used"))
+        model_mode = str(response.get("mode") or "unknown")
+        if candidate is None or not _materially_changed(post.draft_text, candidate):
+            candidate = _deterministic_storytelling_revision(
+                post.draft_text,
+                revision_type,
+                package_data,
+                cleaned_notes,
+            )
+            fallback_used = True
+            model_mode = "deterministic_fallback"
+        candidate = _deduplicate_paragraphs(candidate)
+        if not _materially_changed(post.draft_text, candidate):
+            raise ContentInspirationError(
+                "Revision did not materially change the post narrative."
+            )
+        new_version = int(post.package_version) + 1
+        package_data["primary_post"] = candidate
+        package_data["package_version"] = new_version
+        package_json = _json_dump(package_data)
         connection, should_close = _coerce_connection(database)
         try:
             now = _utc_now()
-            connection.execute("UPDATE content_posts SET draft_text = ?, package_version = ?, package_json = ?, updated_at = ? WHERE id = ?", (text, post.package_version + 1, _json_dump(package_data), now, post_id))
+            _insert_content_version(
+                connection,
+                content_post_id=post_id,
+                package_version=post.package_version,
+                draft_text=post.draft_text,
+                package_json=post.package_json or "{}",
+                revision_type="baseline",
+                revision_notes=None,
+                model_mode="legacy",
+                fallback_used=False,
+                created_at=post.updated_at,
+            )
+            connection.execute(
+                """
+                UPDATE content_posts
+                SET draft_text = ?, package_version = ?, package_json = ?,
+                    status = 'draft', approved_at = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (candidate, new_version, package_json, now, post_id),
+            )
+            _insert_content_version(
+                connection,
+                content_post_id=post_id,
+                package_version=new_version,
+                draft_text=candidate,
+                package_json=package_json,
+                revision_type=revision_type,
+                revision_notes=cleaned_notes,
+                model_mode=model_mode,
+                fallback_used=fallback_used,
+                created_at=now,
+            )
             connection.commit()
             return self.get_package(post_id, connection)
         finally:
@@ -500,3 +575,174 @@ def _json_object(value: str | None) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _revision_task_type(
+    revision_type: str,
+) -> Literal[
+    "content_humor_revision",
+    "content_hook_regeneration",
+    "content_personalization_revision",
+    "content_analytical_revision",
+]:
+    if revision_type in {"make_lighter", "make_funnier"}:
+        return "content_humor_revision"
+    if revision_type == "regenerate_hook":
+        return "content_hook_regeneration"
+    if revision_type == "make_more_personal":
+        return "content_personalization_revision"
+    return "content_analytical_revision"
+
+
+def _revision_prompt(
+    post: ContentPost,
+    revision_type: str,
+    revision_notes: str | None,
+) -> str:
+    return "\n".join(
+        [
+            "Act as a human storytelling editor for a professional LinkedIn post.",
+            "Rewrite the entire post; do not append a generic paragraph to the existing copy.",
+            "Create a cohesive narrative arc with a natural opening, tension or insight, and a clear closing thought.",
+            "Use varied sentence lengths and emotionally legible language without becoming theatrical.",
+            "Preserve source-backed facts exactly and do not invent personal experiences, credentials, outcomes, or relationships.",
+            "Do not add unsupported facts. Return JSON with key primary_post only.",
+            f"Revision goal: {revision_type}",
+            f"Human notes: {revision_notes or 'none'}",
+            f"Verified personal angle: {post.personal_angle_json or '{}'}",
+            f"Source references: {post.source_references_json or '[]'}",
+            f"Factual claims: {post.factual_claims_json or '[]'}",
+            "Current post:",
+            post.draft_text,
+        ]
+    )
+
+
+def _revision_text(response: dict[str, Any]) -> str | None:
+    if response.get("fallback_used"):
+        return None
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return None
+    value = result.get("primary_post")
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    if not cleaned or cleaned.lower() == "mock" or len(cleaned) > 6000:
+        return None
+    return cleaned
+
+
+def _materially_changed(before: str, after: str) -> bool:
+    before_normalized = " ".join(before.split()).lower()
+    after_normalized = " ".join(after.split()).lower()
+    if before_normalized == after_normalized or not after_normalized:
+        return False
+    return SequenceMatcher(None, before_normalized, after_normalized).ratio() < 0.94
+
+
+def _deduplicate_paragraphs(text: str) -> str:
+    seen: set[str] = set()
+    paragraphs: list[str] = []
+    for paragraph in (item.strip() for item in text.split("\n\n")):
+        normalized = " ".join(paragraph.lower().split())
+        if paragraph and normalized not in seen:
+            paragraphs.append(paragraph)
+            seen.add(normalized)
+    return "\n\n".join(paragraphs)
+
+
+def _deterministic_storytelling_revision(
+    current_text: str,
+    revision_type: str,
+    package_data: dict[str, Any],
+    revision_notes: str | None,
+) -> str:
+    paragraphs = [item.strip() for item in current_text.split("\n\n") if item.strip()]
+    title = paragraphs[0] if paragraphs else "A product signal worth examining"
+    source_summary = paragraphs[1] if len(paragraphs) > 1 else title
+    audience = str(package_data.get("target_audience") or "product leaders")
+
+    if revision_type == "make_more_concise":
+        return (
+            f"{title}\n\n{source_summary}\n\n"
+            "What matters is not the headline alone, but the decision it changes. "
+            "Where would you demand stronger evidence before acting?"
+        )
+    if revision_type == "make_more_analytical":
+        return (
+            f"{title}\n\n{source_summary}\n\n"
+            "The interesting tension sits between technical capability and operational trust. "
+            "A system can look convincing in a demo and still struggle at the boundary cases that shape real decisions.\n\n"
+            f"For {audience}, that creates three tests: define the cost of a wrong call, make uncertainty visible, "
+            "and decide what evidence is sufficient before expanding use.\n\n"
+            "The strongest strategy is rarely the fastest deployment. It is the one that knows what must be true before moving forward."
+        )
+    if revision_type in {"make_more_practical", "reduce_hype"}:
+        return (
+            f"{title}\n\n{source_summary}\n\n"
+            "Before turning that signal into a roadmap decision, I would slow the conversation down:\n"
+            "1. Separate the reported evidence from assumptions.\n"
+            "2. Name the boundary case most likely to change the outcome.\n"
+            "3. Agree on what would make the team pause.\n\n"
+            "That may sound less exciting than a launch announcement. It is also where dependable products are built."
+        )
+    if revision_type in {"make_lighter", "make_funnier"}:
+        return (
+            f"{title}\n\n{source_summary}\n\n"
+            "This is the part of product work that rarely makes the demo reel: the edge cases arrive, pull up a chair, "
+            "and ask whether the system is actually ready.\n\n"
+            "The useful response is not more confidence. It is better testing, clearer limits, and a team willing to say, "
+            "'we need more evidence.'\n\n"
+            "Good judgment is not the opposite of speed. Sometimes it is what keeps speed from becoming rework."
+        )
+    if revision_type == "regenerate_hook":
+        return (
+            "When does an impressive capability become a trustworthy product?\n\n"
+            f"{source_summary}\n\n"
+            "That question stays with me because the distance between 'it works' and 'people can rely on it' is where product judgment lives.\n\n"
+            "The answer is usually found in the uncomfortable cases: ambiguous inputs, visible uncertainty, and decisions where being wrong has a real cost."
+        )
+
+    _ = revision_notes
+    return (
+        "I keep coming back to one question: when does a capable system become one people can actually trust?\n\n"
+        f"{source_summary}\n\n"
+        "That is what makes this story feel human. The technology matters, but so does the moment when someone has to rely on its judgment.\n\n"
+        "Product work becomes more than a feature list at that moment. It becomes a promise about how carefully the team has listened, tested, and learned.\n\n"
+        "What would you need to see before that promise felt credible?"
+    )
+
+
+def _insert_content_version(
+    connection: sqlite3.Connection,
+    *,
+    content_post_id: int,
+    package_version: int,
+    draft_text: str,
+    package_json: str,
+    revision_type: str,
+    revision_notes: str | None,
+    model_mode: str,
+    fallback_used: bool,
+    created_at: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO content_post_versions (
+            content_post_id, package_version, draft_text, package_json,
+            revision_type, revision_notes, model_mode, fallback_used, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            content_post_id,
+            package_version,
+            draft_text,
+            package_json,
+            revision_type,
+            revision_notes,
+            model_mode,
+            int(fallback_used),
+            created_at,
+        ),
+    )

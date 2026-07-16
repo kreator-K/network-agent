@@ -1383,6 +1383,36 @@ def test_content_package_explains_existing_plain_draft() -> None:
     assert "exists, but it is a plain topic draft" in message.replies[0]["text"]
 
 
+def test_revise_content_passes_human_storytelling_notes() -> None:
+    class RevisionOrchestrator(FakeOrchestrator):
+        def revise_content_package(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls.append({"method": "revise_content_package", "kwargs": kwargs})
+            return {
+                "id": kwargs["post_id"],
+                "status": "draft",
+                "package_version": 2,
+                "draft_text": "A warmer, cohesive narrative.",
+                "alternative_hooks_json": "[]",
+                "factual_claims_json": "[]",
+                "image_source": "none",
+                "image_alt_text": None,
+            }
+
+    orchestrator = RevisionOrchestrator()
+    message = FakeMessage(
+        "/revise_content 5 custom_revision Open with uncertainty and end warmly"
+    )
+
+    run_async(handlers.revise_content(FakeUpdate(message), FakeContext(orchestrator)))
+
+    call = orchestrator.calls[0]
+    assert call["method"] == "revise_content_package"
+    assert call["kwargs"]["revision_notes"] == (
+        "Open with uncertainty and end warmly"
+    )
+    assert "A warmer, cohesive narrative." in message.replies[0]["text"]
+
+
 def test_confirm_publish_disabled_reports_nothing_published() -> None:
     class PublishOrchestrator(FakeOrchestrator):
         def confirm_linkedin_publish(self, request_id: int, *, database: str) -> dict[str, Any]:
