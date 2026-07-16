@@ -152,6 +152,10 @@ def complete_linkedin_callback(
             reason, stage = "token_exchange_failed", "token_exchange"
         elif "scope" in message:
             reason, stage = "required_scope_missing", "scope_validation"
+            if "required scopes:" in message:
+                missing_scopes = message.split("required scopes:", 1)[1].rstrip(".").strip()
+                if missing_scopes:
+                    reason = f"required_scope_missing:{missing_scopes}"
         elif "encrypt" in message or "fernet" in message:
             reason, stage = "token_encryption_failed", "encryption"
         elif "identity" not in message and "userinfo" not in message:
