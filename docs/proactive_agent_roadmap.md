@@ -16,7 +16,12 @@
 - Phase 9 — Full Integration and Release Hardening: completed; release gate,
   deterministic cross-workflow regression, operational runbooks, backup and
   restore checks, and safe command inventory passed certification
-- Phase 10 — Deployment Readiness and Private Beta: not_started
+- Phase 10 — Deployment and Private Beta: in_progress; systemd packaging,
+  health/readiness, deny-by-default access, backups, rollback procedures, and
+  owner onboarding are implemented; live readiness awaits operator values for
+  the stable domain and Telegram owner IDs
+
+No Phase 11 is defined.
 
 LinkedIn architecture: `NetworkOrchestrator` -> `LinkedInPublishingGateway`
 -> `LinkedInOAuthClient` / `LinkedInApiClient` -> official LinkedIn OAuth and

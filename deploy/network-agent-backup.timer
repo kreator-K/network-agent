@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly Network Agent SQLite backup
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

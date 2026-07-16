@@ -1,14 +1,17 @@
 """Telegram bot application bootstrap."""
 
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
+from telegram import Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -19,6 +22,7 @@ from agents.orchestrator import NetworkOrchestrator
 from db.database import initialize_database
 from integrations.google_calendar_mcp_runtime import GoogleCalendarMCPRuntime
 from telegram_bot import handlers
+from telegram_bot.access import authorization_guard
 
 
 logger = logging.getLogger(__name__)
@@ -45,12 +49,14 @@ def build_bot() -> Application:
         .build()
     )
     application.bot_data["database_path"] = settings.database_path
+    application.bot_data["started_at"] = datetime.now(UTC).isoformat()
     application.bot_data["configuration_diagnostics"] = configuration_diagnostics()
     application.bot_data["orchestrator"] = NetworkOrchestrator(
         calendar_agent=CalendarAgent(Path(settings.database_path))
     )
 
     application.add_handler(CommandHandler("start", handlers.start))
+    application.add_handler(TypeHandler(Update, authorization_guard), group=-1)
     application.add_handler(CommandHandler("add_prospect", handlers.add_prospect))
     application.add_handler(CommandHandler("draft_outreach", handlers.draft_outreach))
     application.add_handler(CommandHandler("draft_followup", handlers.draft_followup))
@@ -120,6 +126,8 @@ def build_bot() -> Application:
         CommandHandler("refinement_history", handlers.refinement_history)
     )
     application.add_handler(CommandHandler("system_check", handlers.system_check))
+    application.add_handler(CommandHandler("feedback", handlers.feedback))
+    application.add_handler(CommandHandler("beta_status", handlers.beta_status))
     application.add_handler(CommandHandler("briefing_now", handlers.briefing_now))
     application.add_handler(CommandHandler("scan_now", handlers.scan_now))
     application.add_handler(CommandHandler("briefing_status", handlers.briefing_status))

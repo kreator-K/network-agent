@@ -15,6 +15,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 cp config/.env.example .env.local
 .venv/bin/python scripts/init_db.py
+.venv/bin/python scripts/prepare_runtime.py
 .venv/bin/python scripts/run_bot.py
 ```
 
@@ -108,3 +109,8 @@ active local configuration, generated Telegram command reference, tracked-file
 secret patterns, SQLite migration/integrity, pytest, mypy, and Ruff. Use
 `scripts/backup_database.py` and `scripts/verify_backup.py` for the documented
 temporary backup/restore check.
+
+Phase 10 deployment uses the documented systemd target in `deploy/`. Review
+`docs/deployment_runbook.md`, set numeric Telegram allowlist values, configure
+a stable HTTPS callback domain, and run `scripts/pre_deploy.py` before
+installing services. No infrastructure is provisioned automatically.

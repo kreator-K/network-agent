@@ -6,6 +6,8 @@ LINKEDIN_REDIRECT_URI.
 """
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
+import logging
 import sys
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -14,11 +16,38 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agents.orchestrator import NetworkOrchestrator
 from config.settings import settings
-from db.database import initialize_database
+from db.database import connect, initialize_database
+
+
+logger = logging.getLogger(__name__)
+
+
+def health_payload() -> dict[str, object]:
+    return {"status": "ok", "service": "linkedin-callback"}
+
+
+def readiness_payload() -> tuple[int, dict[str, object]]:
+    try:
+        with connect(settings.database_path) as connection:
+            row = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='linkedin_oauth_states'").fetchone()
+            if row is None:
+                raise RuntimeError("database migrations are not current")
+        return 200, {"status": "ready", "database": "reachable", "configuration": "loaded"}
+    except Exception as exc:
+        logger.warning("Callback readiness failed: error_type=%s", type(exc).__name__)
+        return 503, {"status": "not_ready", "reason": "local_dependency_unavailable"}
 
 
 class CallbackHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
+        if path == "/healthz":
+            self._json_response(200, health_payload())
+            return
+        if path == "/readyz":
+            status, payload = readiness_payload()
+            self._json_response(status, payload)
+            return
         configured_path = urlparse(settings.linkedin_redirect_uri).path
         if self.path.split("?", 1)[0] != configured_path:
             self.send_error(404)
@@ -38,6 +67,18 @@ class CallbackHandler(BaseHTTPRequestHandler):
             body = ("<!doctype html><html><body><p>LinkedIn authorization could not be completed.</p>" + suffix + "<p>Return to Telegram and run /linkedin_connect again.</p></body></html>").encode("utf-8")
             self.send_response(400)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json_response(self, status: int, payload: dict[str, object]) -> None:
+        body = json.dumps(payload, sort_keys=True).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
 
@@ -47,4 +88,4 @@ class CallbackHandler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     initialize_database(settings.database_path)
-    HTTPServer(("127.0.0.1", 8080), CallbackHandler).serve_forever()
+    HTTPServer((settings.callback_host, settings.callback_port), CallbackHandler).serve_forever()

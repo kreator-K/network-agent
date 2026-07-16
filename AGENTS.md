@@ -120,6 +120,14 @@ read-only integrity, then runs the required test, type, and lint commands.
 Real LinkedIn publishing remains disabled unless a separately approved,
 package-specific live test explicitly changes both publishing switches.
 
+Phase 10 deployment remains single-instance and SQLite-backed. Telegram
+access is deny-by-default through numeric `TELEGRAM_ALLOWED_USER_IDS`; no
+display-name or username authorization is allowed. Production packaging uses
+the reviewed systemd units in `deploy/`, a stable HTTPS reverse proxy for the
+LinkedIn callback, restricted persistent directories, and verified backup
+scripts. A real domain, owner Telegram ID, and explicit operational approval
+are required before private-beta startup.
+
 If these are missing, create the closest equivalent scripts.
 
 ## Final Response Rule for Codex

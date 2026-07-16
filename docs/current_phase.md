@@ -41,4 +41,11 @@ release gate passed with 409 tests, mypy across 78 files, Ruff, migration, and
 integrity checks. Real LinkedIn publishing remains disabled and no provider
 write is part of the release certification.
 
-Phase 10: not started.
+Phase 10 — Deployment and Private Beta: in progress.
+
+Deployment target: one Linux VM with systemd, one writable SQLite instance,
+one bot, one callback adapter behind stable HTTPS, one Calendar MCP child, and
+one backup timer. Live readiness awaits a stable production domain and
+numeric Telegram owner/admin IDs in `.env.local`.
+
+Phase 11: not started and intentionally not defined.

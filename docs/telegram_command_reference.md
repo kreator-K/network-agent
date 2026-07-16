@@ -8,6 +8,7 @@ Handlers validate input, call `NetworkOrchestrator`, and format safe responses.
 - `/add_signal_source`
 - `/approve_candidate`
 - `/approve_signal_source`
+- `/beta_status`
 - `/brand_profile`
 - `/brand_profile_versions`
 - `/briefing_history`
@@ -29,6 +30,7 @@ Handlers validate input, call `NetworkOrchestrator`, and format safe responses.
 - `/draft_outreach`
 - `/draft_post`
 - `/enable_signal_source`
+- `/feedback`
 - `/followups_due`
 - `/linkedin_access_check`
 - `/linkedin_connect`

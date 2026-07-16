@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,24 @@ def configuration_diagnostics(current: Settings = settings) -> dict[str, Any]:
     checks.extend(
         [
             _check(
+                "TELEGRAM_ALLOWED_USER_IDS",
+                bool(current.telegram_allowed_user_ids.strip()) and all(
+                    re.fullmatch(r"[0-9]+", item.strip())
+                    for item in current.telegram_allowed_user_ids.split(",")
+                    if item.strip()
+                ),
+                "numeric private-beta allowlist" if current.telegram_allowed_user_ids.strip() else "missing; access is denied by default",
+            ),
+            _check(
+                "TELEGRAM_ADMIN_USER_IDS",
+                all(
+                    re.fullmatch(r"[0-9]+", item.strip())
+                    for item in current.telegram_admin_user_ids.split(",")
+                    if item.strip()
+                ),
+                "numeric admin IDs" if current.telegram_admin_user_ids.strip() else "not configured",
+            ),
+            _check(
                 "LINKEDIN_PUBLISH_MODE",
                 current.linkedin_publish_mode in {"disabled", "mock", "real"},
                 current.linkedin_publish_mode if current.linkedin_publish_mode in {"disabled", "mock", "real"} else "invalid",
@@ -106,9 +125,18 @@ def configuration_diagnostics(current: Settings = settings) -> dict[str, Any]:
     ]
     if invalid_booleans:
         checks.append(_check("boolean_variables", False, "invalid: " + ",".join(invalid_booleans)))
-    valid = all(bool(item["valid"]) for item in checks)
+    valid = all(
+        bool(item["valid"])
+        for item in checks
+        if item["name"] not in {"TELEGRAM_ALLOWED_USER_IDS", "TELEGRAM_ADMIN_USER_IDS"}
+    )
+    beta_access_ready = any(
+        item["name"] == "TELEGRAM_ALLOWED_USER_IDS" and bool(item["valid"])
+        for item in checks
+    )
     return {
         "valid": valid,
+        "beta_access_ready": beta_access_ready,
         "checks": checks,
         "active_modes": {
             "model": "mock" if current.mock_mode else "real",

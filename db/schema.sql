@@ -606,3 +606,15 @@ CREATE TRIGGER IF NOT EXISTS trg_linkedin_publish_resolutions_no_delete
 BEFORE DELETE ON linkedin_publish_resolutions BEGIN
     SELECT RAISE(ABORT, 'LinkedIn publish resolutions are append-only');
 END;
+
+CREATE TABLE IF NOT EXISTS beta_feedback (
+    id INTEGER PRIMARY KEY,
+    telegram_user_id TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'feedback',
+    message TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK (category IN ('feedback', 'bug', 'safety')),
+    CHECK (length(message) BETWEEN 1 AND 4000)
+);
+CREATE INDEX IF NOT EXISTS idx_beta_feedback_created_at
+ON beta_feedback(created_at DESC);

@@ -100,6 +100,18 @@ class Settings:
     max_background_operations: int = int(
         os.getenv("MAX_BACKGROUND_OPERATIONS", "2")
     )
+    application_environment: str = os.getenv("APPLICATION_ENVIRONMENT", "development")
+    log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    callback_host: str = os.getenv("LINKEDIN_CALLBACK_HOST", "127.0.0.1")
+    callback_port: int = int(os.getenv("LINKEDIN_CALLBACK_PORT", "8080"))
+    telegram_allowed_user_ids: str = os.getenv("TELEGRAM_ALLOWED_USER_IDS", "")
+    telegram_admin_user_ids: str = os.getenv("TELEGRAM_ADMIN_USER_IDS", "")
+    media_storage_path: str = os.getenv("MEDIA_STORAGE_PATH", "runtime/media")
+    backup_path: str = os.getenv("BACKUP_PATH", "backups")
+    log_path: str = os.getenv("LOG_PATH", "logs")
+    runtime_state_path: str = os.getenv("RUNTIME_STATE_PATH", "runtime/state")
+    backup_retention_count: int = int(os.getenv("BACKUP_RETENTION_COUNT", "14"))
+    backup_schedule: str = os.getenv("BACKUP_SCHEDULE", "03:00")
 
 
 settings = Settings()

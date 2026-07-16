@@ -14,6 +14,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from agents.orchestrator import NetworkOrchestrator, NetworkOrchestratorError
 from agents.system_integrity_agent import SystemIntegrityAgent
 from config.settings import settings
+from db.database import connect
+from telegram_bot.access import is_admin, update_user_id
 
 
 logger = logging.getLogger(__name__)
@@ -111,8 +113,58 @@ async def start(update: Any, context: Any) -> None:
                 "/publish_request <request_id>",
                 "/publish_history",
                 "/resolve_publish_uncertain <request_id> posted|not_posted",
+                "/feedback [bug|safety] <message>",
+                "/beta_status",
             ]
         ),
+    )
+
+
+async def feedback(update: Any, context: Any) -> None:
+    """Store private-beta feedback locally without forwarding it externally."""
+    payload = _command_payload(update).strip()
+    if not payload:
+        await _reply(update, "Usage: /feedback [bug|safety] <message>")
+        return
+    parts = payload.split(maxsplit=1)
+    category = parts[0].lower() if parts[0].lower() in {"bug", "safety"} else "feedback"
+    message = parts[1].strip() if category != "feedback" and len(parts) == 2 else payload
+    if not message or len(message) > 4000:
+        await _reply(update, "Feedback must contain between 1 and 4000 characters.")
+        return
+    user_id = update_user_id(update)
+    if user_id is None:
+        await _reply(update, "Could not identify the authorized Telegram user.")
+        return
+    with connect(_database(context)) as connection:
+        connection.execute(
+            "INSERT INTO beta_feedback (telegram_user_id, category, message, created_at) VALUES (?, ?, ?, ?)",
+            (str(user_id), category, message, datetime.now(UTC).isoformat()),
+        )
+    await _reply(update, "Feedback received and stored for the private beta.")
+
+
+async def beta_status(update: Any, context: Any) -> None:
+    """Show safe owner-only private-beta operational status."""
+    if not is_admin(update):
+        await _reply(update, "This command is available to beta administrators only.")
+        return
+    with connect(_database(context)) as connection:
+        schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        uncertain = int(connection.execute("SELECT COUNT(*) FROM linkedin_publish_requests WHERE status LIKE '%uncertain%' OR status = 'processing_unknown'").fetchone()[0])
+    diagnostics = context.application.bot_data.get("configuration_diagnostics", {})
+    modes = diagnostics.get("active_modes", {})
+    authorized_count = len([item for item in settings.telegram_allowed_user_ids.split(",") if item.strip()])
+    await _reply(
+        update,
+        "Beta status:\n"
+        f"Application environment: {settings.application_environment}\n"
+        f"Authorized users: {authorized_count}\n"
+        f"LinkedIn mode: {modes.get('linkedin', settings.linkedin_publish_mode)}\n"
+        f"Real publishing enabled: {settings.linkedin_real_publish_enabled}\n"
+        f"Database schema version: {schema_version}\n"
+        f"Uncertain operations: {uncertain}\n"
+        "Health: local diagnostics available",
     )
 
 

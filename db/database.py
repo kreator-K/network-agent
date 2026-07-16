@@ -63,6 +63,7 @@ def initialize_database(
             "INSERT OR IGNORE INTO briefing_settings (id, updated_at) VALUES (1, ?)",
             (_utc_now(),),
         )
+        connection.execute("PRAGMA user_version = 10")
 
 
 def canonical_signal_scoring_config_json(config: dict[str, Any]) -> str:

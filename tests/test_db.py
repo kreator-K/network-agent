@@ -13,6 +13,7 @@ from db.models import Prospect, ProspectStatus, RefinementHistoryEntry
 
 
 EXPECTED_TABLES = [
+    "beta_feedback",
     "briefing_runs",
     "briefing_settings",
     "calendar_blocks",

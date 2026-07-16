@@ -1,0 +1,15 @@
+[Unit]
+Description=Network Agent SQLite backup
+
+[Service]
+Type=oneshot
+User=network-agent
+Group=network-agent
+WorkingDirectory=/opt/network-agent
+EnvironmentFile=/opt/network-agent/.env.local
+ExecStart=/bin/sh -c 'mkdir -p "$BACKUP_PATH" && /opt/network-agent/.venv/bin/python scripts/backup_database.py --output "$BACKUP_PATH/network-agent-$(date -u +%%Y%%m%%dT%%H%%M%%SZ).db"'
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/network-agent

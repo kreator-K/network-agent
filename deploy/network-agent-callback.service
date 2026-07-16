@@ -1,0 +1,23 @@
+[Unit]
+Description=Network Agent LinkedIn OAuth callback adapter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=network-agent
+Group=network-agent
+WorkingDirectory=/opt/network-agent
+EnvironmentFile=/opt/network-agent/.env.local
+ExecStart=/opt/network-agent/.venv/bin/python -m scripts.run_linkedin_callback
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/network-agent
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

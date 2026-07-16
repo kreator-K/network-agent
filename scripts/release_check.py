@@ -25,6 +25,13 @@ REQUIRED_DOCS = (
     "docs/phase9_release_hardening.md", "docs/release_candidate_checklist.md",
     "docs/operator_runbook.md", "docs/backup_restore.md", "docs/incident_response.md",
     "docs/security_model.md", "docs/telegram_command_reference.md", "docs/system_architecture.md",
+    "docs/phase10_deployment_private_beta.md", "docs/production_architecture.md",
+    "docs/deployment_runbook.md", "docs/private_beta_runbook.md",
+    "docs/private_beta_feature_matrix.md", "docs/private_beta_test_plan.md",
+    "docs/production_configuration.md", "docs/domain_tls_and_oauth_callback.md",
+    "docs/production_backup_restore.md", "docs/deployment_rollback.md",
+    "docs/production_monitoring.md", "docs/production_incident_response.md",
+    "docs/private_beta_privacy.md",
 )
 
 

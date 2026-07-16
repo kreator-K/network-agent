@@ -12,3 +12,4 @@ vendor/google-calendar-mcp/node_modules/
 backups/
 logs/
 *.log
+runtime/
