@@ -8,7 +8,7 @@ from typing import Any, cast
 import pytest
 
 from agents.orchestrator import NetworkOrchestrator, NetworkOrchestratorError
-from db.database import initialize_database
+from db.database import connect, initialize_database
 from db.models import (
     CalendarBlock,
     ContentPost,
@@ -610,3 +610,33 @@ def test_personal_brand_profile_workflows_use_immutable_versions(
     restored = orchestrator.activate_brand_profile(1, database=database_path)
     assert restored["version"] == 1
     assert restored["is_active"] is True
+
+
+def test_guided_next_steps_prioritize_due_followups_and_review_work(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "network_agent.db"
+    initialize_database(database_path)
+    with connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO prospects (
+                name, source, status, last_touch_date, created_at, updated_at
+            ) VALUES ('Ada', 'manual', 'connection_sent', '2020-01-01T00:00:00+00:00', ?, ?)
+            """,
+            ("2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00+00:00"),
+        )
+        connection.execute(
+            """
+            INSERT INTO content_posts (
+                draft_text, image_source, status, package_json, created_at, updated_at
+            ) VALUES ('Reviewable copy', 'none', 'draft', '{}', ?, ?)
+            """,
+            ("2026-07-25T00:00:00+00:00", "2026-07-25T00:00:00+00:00"),
+        )
+
+    guide = NetworkOrchestrator().get_guided_next_steps(database=database_path)
+
+    assert guide["steps"][0]["command"] == "/followups_due"
+    assert guide["steps"][1]["command"] == "/content_package 1"
+    assert "human-reviewed" in guide["steps"][0]["detail"]

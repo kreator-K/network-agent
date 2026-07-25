@@ -86,6 +86,18 @@ class FakeOrchestrator:
         self.followups_due: list[dict[str, Any]] = []
         self.system_result: dict[str, Any] | None = None
 
+    def get_guided_next_steps(self, **kwargs: Any) -> dict[str, list[dict[str, str]]]:
+        self.calls.append({"method": "get_guided_next_steps", "kwargs": kwargs})
+        return {
+            "steps": [
+                {
+                    "title": "Review your newest content package",
+                    "command": "/content_package 3",
+                    "detail": "Read it, revise it, or approve it for later posting.",
+                }
+            ]
+        }
+
     def add_prospect(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append({"method": "add_prospect", "kwargs": kwargs})
         return {"prospect": FakeProspect(id=7, name=kwargs["name"]), "status": "added"}
@@ -287,7 +299,6 @@ class FakeOrchestrator:
     def discard_outreach_draft(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append({"method": "discard_outreach_draft", "kwargs": kwargs})
         return {"status": "discarded"}
-
     def save_content_draft(self, **kwargs: Any) -> dict[str, Any]:
         self.calls.append({"method": "save_content_draft", "kwargs": kwargs})
         return {"status": "saved"}
@@ -494,6 +505,25 @@ class FakeCallbackQuery:
 
     async def edit_message_text(self, text: str) -> None:
         self.edited_text = text
+
+
+def test_start_shows_a_small_state_aware_next_step_guide() -> None:
+    orchestrator = FakeOrchestrator()
+    message = FakeMessage("/start")
+
+    run_async(handlers.start(FakeUpdate(message), FakeContext(orchestrator)))
+
+    assert orchestrator.calls == [
+        {
+            "method": "get_guided_next_steps",
+            "kwargs": {"database": "test.db"},
+        }
+    ]
+    reply = message.replies[0]["text"]
+    assert "Welcome back. Here are your next best steps:" in reply
+    assert "/content_package 3" in reply
+    assert "Available commands:" not in reply
+    assert "Use Telegram's command menu" in reply
 
 
 def test_add_prospect_parses_pipe_delimited_input_correctly() -> None:

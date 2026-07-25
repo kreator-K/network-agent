@@ -98,6 +98,164 @@ class NetworkOrchestrator:
         """Legacy command-shaped entrypoint retained for scaffold handlers."""
         return {"command": command, "payload": payload, "status": "unimplemented"}
 
+    def get_guided_next_steps(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Return a compact, read-only workflow guide for the Telegram home screen."""
+        try:
+            connection, should_close = _coerce_connection(database)
+            try:
+                steps: list[dict[str, str]] = []
+                cadence_row = connection.execute(
+                    "SELECT rule_value FROM core_intent WHERE rule_key = 'cadence_floor_days'"
+                ).fetchone()
+                try:
+                    cadence_days = int(cadence_row["rule_value"]) if cadence_row else 21
+                except (TypeError, ValueError):
+                    cadence_days = 21
+                threshold_timestamp = (
+                    datetime.now(UTC).replace(microsecond=0).timestamp()
+                    - (cadence_days * 24 * 60 * 60)
+                )
+                threshold_iso = datetime.fromtimestamp(
+                    threshold_timestamp, UTC
+                ).isoformat()
+                due_count = int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) FROM prospects
+                        WHERE status NOT IN ('meeting_confirmed', 'closed')
+                          AND (
+                              last_touch_date IS NULL
+                              OR last_touch_date < ?
+                          )
+                        """,
+                        (threshold_iso,),
+                    ).fetchone()[0]
+                )
+                if due_count:
+                    steps.append(
+                        {
+                            "title": f"Review {due_count} follow-up{'s' if due_count != 1 else ''}",
+                            "command": "/followups_due",
+                            "detail": "See who is ready for a human-reviewed follow-up draft.",
+                        }
+                    )
+
+                package = connection.execute(
+                    """
+                    SELECT id FROM content_posts
+                    WHERE package_json IS NOT NULL
+                      AND status IN ('draft', 'saved', 'needs_confirmation')
+                    ORDER BY updated_at DESC, id DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if package is not None:
+                    post_id = int(package["id"])
+                    steps.append(
+                        {
+                            "title": "Review your newest content package",
+                            "command": f"/content_package {post_id}",
+                            "detail": "Read it, revise it, or approve it for later posting.",
+                        }
+                    )
+
+                opportunity = connection.execute(
+                    """
+                    SELECT id FROM content_opportunities
+                    WHERE status IN ('candidate', 'selected', 'saved')
+                    ORDER BY updated_at DESC, id DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if opportunity is not None:
+                    opportunity_id = int(opportunity["id"])
+                    steps.append(
+                        {
+                            "title": "Review a content opportunity",
+                            "command": f"/content_opportunity {opportunity_id}",
+                            "detail": "Use the source-backed angle before preparing a package.",
+                        }
+                    )
+
+                pending_signals = int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) FROM signals
+                        WHERE eligibility_status = 'pending'
+                          AND status IN ('fetched', 'normalized')
+                        """
+                    ).fetchone()[0]
+                )
+                if pending_signals:
+                    steps.append(
+                        {
+                            "title": f"Evaluate {pending_signals} new signal{'s' if pending_signals != 1 else ''}",
+                            "command": "/score_signals 5",
+                            "detail": "Score a small batch before creating any content opportunity.",
+                        }
+                    )
+
+                enabled_sources = int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) FROM signal_sources
+                        WHERE approval_status = 'approved' AND enabled = 1
+                        """
+                    ).fetchone()[0]
+                )
+                if enabled_sources and not pending_signals:
+                    steps.append(
+                        {
+                            "title": "Scan your approved public sources",
+                            "command": "/scan_signals",
+                            "detail": "Fetch new public-feed items for review; nothing is published automatically.",
+                        }
+                    )
+                if not enabled_sources:
+                    steps.append(
+                        {
+                            "title": "Add your first public content source",
+                            "command": "/add_signal_source <name> | <rss_or_atom_url>",
+                            "detail": "You will review and approve the source before it is scanned.",
+                        }
+                    )
+
+                prospect = connection.execute(
+                    """
+                    SELECT id FROM prospects
+                    WHERE status = 'not_contacted'
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if prospect is not None:
+                    prospect_id = int(prospect["id"])
+                    steps.append(
+                        {
+                            "title": "Draft outreach for your newest prospect",
+                            "command": f"/draft_outreach {prospect_id} career_guidance",
+                            "detail": "The result stays a draft for you to send manually in LinkedIn.",
+                        }
+                    )
+                if not steps:
+                    steps.append(
+                        {
+                            "title": "Add a prospect to begin networking",
+                            "command": "/add_prospect <name> | <profile_url> | <location> | <role_title> | <company> | <notes>",
+                            "detail": "Or add an approved public source to begin the content workflow.",
+                        }
+                    )
+                return {"steps": steps[:3]}
+            finally:
+                if should_close:
+                    connection.close()
+        except Exception as exc:
+            _raise_with_context("get_guided_next_steps", {}, exc)
+
     def prepare_linkedin_authorization(
         self, *, telegram_user_id: str, telegram_chat_id: str, database: DatabaseRef,
     ) -> dict[str, Any]:

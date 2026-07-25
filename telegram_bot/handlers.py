@@ -43,81 +43,30 @@ CONTENT_OUTCOMES = {
 
 
 async def start(update: Any, context: Any) -> None:
-    """List available bot commands."""
-    _ = context
-    await _reply(
-        update,
-        "\n".join(
+    """Show a small, state-aware next-step guide instead of every command."""
+    try:
+        guide = _orchestrator(context).get_guided_next_steps(
+            database=_database(context)
+        )
+    except NetworkOrchestratorError:
+        await _reply(
+            update,
+            "Welcome to Network Growth Agent. Start with /brand_profile or "
+            "/add_prospect <name> | <profile_url> | <location> | <role_title> | <company> | <notes>.",
+        )
+        return
+
+    lines = ["Welcome back. Here are your next best steps:"]
+    for index, step in enumerate(guide["steps"], start=1):
+        lines.extend(
             [
-                "Available commands:",
-                "/add_prospect <name> | <profile_url> | <location> | <role_title> | <company> | <notes>",
-                "/draft_outreach <prospect_id> <ask_type>",
-                "/draft_followup <prospect_id>",
-                "/followups_due",
-                "/meeting_confirmed <prospect_id> <date:YYYY-MM-DD> <start_time:HH:MM> [end_time:HH:MM]",
-                "/draft_post <topic>",
-                "/pending_drafts",
-                "/brand_profile",
-                "/brand_profile_versions",
-                "/activate_brand_profile <version>",
-                "/set_brand_field <field> | <value>",
-                "/add_signal_source <name> | <rss_or_atom_url>",
-                "/signal_sources",
-                "/approve_signal_source <source_id>",
-                "/reject_signal_source <source_id>",
-                "/enable_signal_source <source_id>",
-                "/disable_signal_source <source_id>",
-                "/scan_signal_source <source_id>",
-                "/scan_signals",
-                "/signals",
-                "/signal <signal_id>",
-                "/score_signal <signal_id>",
-                "/score_signals [limit]",
-                "/ranked_signals",
-                "/scoring_diagnostics",
-                "/scoring_queue [limit]",
-                "/content_opportunities",
-                "/content_opportunity <opportunity_id>",
-                "/prepare_content <opportunity_id>",
-                "/content_packages",
-                "/content_package <post_id>",
-                "/content_sources <post_id>",
-                "/content_claims <post_id>",
-                "/revise_content <post_id> <revision_type>",
-                "/record_outcome <outreach|content> <id> <outcome> [notes]",
-                "/suggest_refinements",
-                "/refinement_status",
-                "/refinement_report",
-                "/rollback_refinement <refinement_id>",
-                "/refinement_history",
-                "/system_check",
-                "/briefing_now [dry_run]",
-                "/scan_now",
-                "/briefing_status",
-                "/briefing_history",
-                "/briefing_run <run_id>",
-                "/daily_briefing on|off|time <HH:MM>",
-                "/discover_candidates",
-                "/prospect_candidates",
-                "/approve_candidate <candidate_id>",
-                "/linkedin_connect",
-                "/linkedin_connection_status",
-                "/linkedin_access_check",
-                "/linkedin_publish_status",
-                "/linkedin_reauthorize",
-                "/linkedin_disconnect",
-                "/linkedin_oauth_history",
-                "/prepare_publish <post_id>",
-                "/confirm_publish <request_id>",
-                "/cancel_publish <request_id>",
-                "/publish_request <request_id>",
-                "/publish_history",
-                "/resolve_publish_uncertain <request_id> posted|not_posted",
-                "/feedback [bug|safety] <message>",
-                "/beta_status",
+                f"{index}. {step['title']}",
+                step["command"],
+                step["detail"],
             ]
-        ),
-    )
+        )
+    lines.append("Use Telegram's command menu when you need a different tool.")
+    await _reply(update, "\n".join(lines))
 
 
 async def feedback(update: Any, context: Any) -> None:
