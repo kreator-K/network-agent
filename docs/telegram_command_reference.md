@@ -6,6 +6,7 @@ Handlers validate input, call `NetworkOrchestrator`, and format safe responses.
 - `/activate_brand_profile`
 - `/add_prospect`
 - `/add_signal_source`
+- `/add_signal_sources`
 - `/approve_candidate`
 - `/approve_signal_source`
 - `/beta_status`

@@ -560,6 +560,65 @@ def test_add_prospect_handles_missing_optional_fields() -> None:
     assert kwargs["notes"] is None
 
 
+def test_add_signal_sources_parses_comma_separated_entries_and_reports_skips() -> None:
+    class BulkSourceOrchestrator(FakeOrchestrator):
+        def add_signal_sources(self, **kwargs: Any) -> dict[str, list[dict[str, Any]]]:
+            self.calls.append({"method": "add_signal_sources", "kwargs": kwargs})
+            return {
+                "added": [
+                    {"id": 11, "name": "Product Hunt"},
+                    {"id": 12, "name": "MIT News"},
+                ],
+                "skipped": [
+                    {
+                        "entry": "Bad entry",
+                        "reason": "Expected name | RSS or Atom URL.",
+                    }
+                ],
+            }
+
+    orchestrator = BulkSourceOrchestrator()
+    message = FakeMessage(
+        "/add_signal_sources Product Hunt | https://example.com/feed, "
+        "MIT News | https://example.org/rss, Bad entry"
+    )
+
+    run_async(
+        handlers.add_signal_sources(FakeUpdate(message), FakeContext(orchestrator))
+    )
+
+    call = orchestrator.calls[0]
+    assert call["method"] == "add_signal_sources"
+    assert call["kwargs"]["sources"] == [
+        {
+            "entry": "Product Hunt | https://example.com/feed",
+            "name": "Product Hunt",
+            "url": "https://example.com/feed",
+        },
+        {
+            "entry": "MIT News | https://example.org/rss",
+            "name": "MIT News",
+            "url": "https://example.org/rss",
+        },
+        {"entry": "Bad entry", "name": "", "url": ""},
+    ]
+    reply = message.replies[0]["text"]
+    assert "Added as pending approval: 2" in reply
+    assert "Skipped: 1" in reply
+    assert "Product Hunt (ID: 11)" in reply
+    assert "Skipped Bad entry" in reply
+
+
+def test_add_signal_sources_requires_at_least_one_entry() -> None:
+    message = FakeMessage("/add_signal_sources")
+
+    run_async(
+        handlers.add_signal_sources(FakeUpdate(message), FakeContext(FakeOrchestrator()))
+    )
+
+    assert "Usage: /add_signal_sources" in message.replies[0]["text"]
+
+
 def test_draft_outreach_validates_ask_type() -> None:
     orchestrator = FakeOrchestrator()
     message = FakeMessage("/draft_outreach 7 career_guidance")

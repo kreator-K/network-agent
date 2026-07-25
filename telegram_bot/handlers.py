@@ -826,6 +826,49 @@ async def add_signal_source(update: Any, context: Any) -> None:
     )
 
 
+async def add_signal_sources(update: Any, context: Any) -> None:
+    """Parse a comma-separated batch of pending RSS or Atom sources."""
+    raw_entries = [entry.strip() for entry in _command_payload(update).split(",")]
+    sources: list[dict[str, str]] = []
+    for entry in raw_entries:
+        if "|" not in entry:
+            sources.append({"entry": entry, "name": "", "url": ""})
+            continue
+        name, url = (part.strip() for part in entry.split("|", 1))
+        sources.append({"entry": entry, "name": name, "url": url})
+    if not raw_entries or not any(entry for entry in raw_entries):
+        await _reply(
+            update,
+            "Usage: /add_signal_sources <name> | <rss_or_atom_url>, <name> | <rss_or_atom_url>",
+        )
+        return
+    try:
+        result = _orchestrator(context).add_signal_sources(
+            sources=sources,
+            database=_database(context),
+        )
+    except NetworkOrchestratorError:
+        await _reply(update, "Could not process those signal sources.")
+        return
+
+    lines = [
+        "Bulk source update complete.",
+        f"Added as pending approval: {len(result['added'])}",
+        f"Skipped: {len(result['skipped'])}",
+    ]
+    lines.extend(
+        f"- {source['name']} (ID: {source['id']})"
+        for source in result["added"]
+    )
+    lines.extend(
+        f"- Skipped {item['entry'] or 'blank entry'}: {item['reason']}"
+        for item in result["skipped"]
+    )
+    if result["added"]:
+        lines.append("Review each source, then use /approve_signal_source <source_id>.")
+    await _reply(update, "\n".join(lines))
+
+
 async def signal_sources(update: Any, context: Any) -> None:
     """List stored public feed sources."""
     try:

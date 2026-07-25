@@ -783,6 +783,34 @@ class NetworkOrchestrator:
         except Exception as exc:
             _raise_with_context("add_signal_source", {"name": name}, exc)
 
+    def add_signal_sources(
+        self,
+        sources: list[dict[str, str]],
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Add a batch of user-supplied public feeds without enabling any source."""
+        added: list[dict[str, Any]] = []
+        skipped: list[dict[str, str]] = []
+        for source in sources:
+            name = source.get("name", "").strip()
+            url = source.get("url", "").strip()
+            if not name or not url:
+                skipped.append(
+                    {
+                        "entry": source.get("entry", "").strip(),
+                        "reason": "Expected name | RSS or Atom URL.",
+                    }
+                )
+                continue
+            try:
+                added.append(
+                    self.add_signal_source(name=name, url=url, database=database)
+                )
+            except NetworkOrchestratorError as exc:
+                skipped.append({"entry": name, "reason": str(exc)})
+        return {"added": added, "skipped": skipped}
+
     def approve_signal_source(
         self,
         source_id: int,

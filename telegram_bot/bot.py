@@ -75,6 +75,7 @@ def build_bot() -> Application:
     )
     application.add_handler(CommandHandler("set_brand_field", handlers.set_brand_field))
     application.add_handler(CommandHandler("add_signal_source", handlers.add_signal_source))
+    application.add_handler(CommandHandler("add_signal_sources", handlers.add_signal_sources))
     application.add_handler(CommandHandler("signal_sources", handlers.signal_sources))
     application.add_handler(
         CommandHandler("approve_signal_source", handlers.approve_signal_source)
