@@ -207,6 +207,23 @@ class NetworkOrchestrator:
                         """
                     ).fetchone()[0]
                 )
+                pending_source = connection.execute(
+                    """
+                    SELECT id, name FROM signal_sources
+                    WHERE approval_status = 'pending'
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if pending_source is not None:
+                    source_id = int(pending_source["id"])
+                    steps.append(
+                        {
+                            "title": f"Review pending source: {pending_source['name']}",
+                            "command": f"/approve_signal_source {source_id}",
+                            "detail": "Approval is required before a public source can be enabled or scanned.",
+                        }
+                    )
                 if enabled_sources and not pending_signals:
                     steps.append(
                         {
@@ -215,7 +232,7 @@ class NetworkOrchestrator:
                             "detail": "Fetch new public-feed items for review; nothing is published automatically.",
                         }
                     )
-                if not enabled_sources:
+                if not enabled_sources and pending_source is None:
                     steps.append(
                         {
                             "title": "Add your first public content source",

@@ -673,3 +673,22 @@ def test_bulk_signal_sources_keeps_valid_entries_when_one_is_invalid() -> None:
     assert result["added"] == [{"id": 5, "name": "Good"}]
     assert len(result["skipped"]) == 1
     assert result["skipped"][0]["entry"] == "Invalid"
+
+
+def test_guided_next_steps_prioritize_pending_source_approval(tmp_path: Path) -> None:
+    database_path = tmp_path / "network_agent.db"
+    initialize_database(database_path)
+    with connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO signal_sources (
+                name, source_type, url, approval_status, enabled, created_at, updated_at
+            ) VALUES ('Product community', 'rss', 'https://example.com/feed', 'pending', 0, ?, ?)
+            """,
+            ("2026-07-25T00:00:00+00:00", "2026-07-25T00:00:00+00:00"),
+        )
+
+    guide = NetworkOrchestrator().get_guided_next_steps(database=database_path)
+
+    assert guide["steps"][0]["command"] == "/approve_signal_source 1"
+    assert "Product community" in guide["steps"][0]["title"]
