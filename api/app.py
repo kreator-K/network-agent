@@ -92,6 +92,34 @@ class ContentVariantRequest(ApiModel):
     variant_number: int = Field(ge=1, le=3)
 
 
+class BrandProfileFieldRequest(ApiModel):
+    field_name: Literal[
+        "professional_identity",
+        "current_program",
+        "preferred_depth",
+        "notes",
+        "institutions",
+        "career_focus",
+        "content_pillars",
+        "target_audiences",
+        "preferred_tone",
+        "preferred_post_formats",
+        "humor_preferences",
+        "personal_experience_boundaries",
+        "verified_experiences",
+        "allowed_personal_claims",
+        "claims_requiring_confirmation",
+        "topics_to_avoid",
+        "posting_preferences",
+        "networking_goals",
+        "desired_network_types",
+        "industries_of_interest",
+        "companies_of_interest",
+        "geographic_preferences",
+    ]
+    value: str = Field(max_length=5000)
+
+
 def create_app(
     *,
     orchestrator: NetworkOrchestrator | None = None,
@@ -134,6 +162,10 @@ def create_app(
             Route("/api/v1/linkedin/publish-requests/{request_id:int}", _linkedin_publish_request, methods=["GET"]),
             Route("/api/v1/linkedin/publish-requests/{request_id:int}/confirm", _confirm_linkedin_publish, methods=["POST"]),
             Route("/api/v1/linkedin/publish-requests/{request_id:int}/cancel", _cancel_linkedin_publish, methods=["POST"]),
+            Route("/api/v1/profile", _brand_profile, methods=["GET"]),
+            Route("/api/v1/profile/field", _update_brand_profile_field, methods=["PATCH"]),
+            Route("/api/v1/profile/versions", _brand_profile_versions, methods=["GET"]),
+            Route("/api/v1/profile/versions/{version:int}/activate", _activate_brand_profile, methods=["POST"]),
         ],
     )
     application.state.orchestrator = orchestrator or NetworkOrchestrator()
@@ -579,6 +611,65 @@ async def _cancel_linkedin_publish(request: Request) -> JSONResponse:
         request,
         lambda: _orchestrator(request).cancel_linkedin_publish(
             int(request.path_params["request_id"]),
+            database=_database(request),
+        ),
+    )
+
+
+async def _brand_profile(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).get_brand_profile_summary(
+            database=_database(request),
+        ),
+    )
+
+
+async def _brand_profile_versions(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    limit = _bounded_limit(request, default=20)
+    if isinstance(limit, JSONResponse):
+        return limit
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).list_brand_profile_versions(
+            database=_database(request),
+            limit=limit,
+        ),
+    )
+
+
+async def _update_brand_profile_field(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    parsed = await _parse_body(request, BrandProfileFieldRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    field = cast(BrandProfileFieldRequest, parsed)
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).update_brand_profile_field(
+            field.field_name,
+            field.value,
+            database=_database(request),
+        ),
+    )
+
+
+async def _activate_brand_profile(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).activate_brand_profile(
+            int(request.path_params["version"]),
             database=_database(request),
         ),
     )

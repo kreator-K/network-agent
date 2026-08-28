@@ -81,6 +81,20 @@ export type MeetingPreview = {
   calendar_action: false;
   confirmation_required: true;
 };
+export type BrandProfileSummary = {
+  id: number;
+  version: number;
+  is_active: boolean;
+  created_at: string;
+  professional_identity?: string;
+  current_program?: string | null;
+  institutions?: string[];
+  career_focus?: string[];
+  content_pillars?: string[];
+  target_audiences?: string[];
+  preferred_tone?: string[];
+  preferred_depth?: string | null;
+};
 
 type ApiEnvelope<T> = { data: T };
 
@@ -243,6 +257,30 @@ export async function selectContentVariant(postId: number, variantNumber: number
   const result = await apiRequest<unknown>(`/api/v1/content/${postId}/select-variant`, {
     method: "POST",
     body: JSON.stringify({ variant_number: variantNumber }),
+  }, null);
+  return result !== null;
+}
+
+export async function getBrandProfile(): Promise<BrandProfileSummary | null> {
+  return apiRequest<BrandProfileSummary | null>("/api/v1/profile", { method: "GET" }, null);
+}
+
+export async function getBrandProfileVersions(): Promise<BrandProfileSummary[]> {
+  return apiRequest<BrandProfileSummary[]>("/api/v1/profile/versions?limit=20", { method: "GET" }, []);
+}
+
+export async function updateBrandProfileField(fieldName: string, value: string): Promise<boolean> {
+  const result = await apiRequest<unknown>("/api/v1/profile/field", {
+    method: "PATCH",
+    body: JSON.stringify({ field_name: fieldName, value }),
+  }, null);
+  return result !== null;
+}
+
+export async function activateBrandProfile(version: number): Promise<boolean> {
+  const result = await apiRequest<unknown>(`/api/v1/profile/versions/${version}/activate`, {
+    method: "POST",
+    body: JSON.stringify({}),
   }, null);
   return result !== null;
 }

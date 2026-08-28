@@ -125,6 +125,22 @@ class FakeOrchestrator:
         self.calls.append(("select_variant", {"post_id": post_id, "variant_number": variant_number, **kwargs}))
         return {"id": post_id, "package_version": 3, "status": "draft"}
 
+    def get_brand_profile_summary(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("profile", kwargs))
+        return {"version": 4, "is_active": True, "professional_identity": "Product leader", "content_pillars": ["AI products"]}
+
+    def list_brand_profile_versions(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.calls.append(("profile_versions", kwargs))
+        return [{"version": 4, "is_active": True}, {"version": 3, "is_active": False}]
+
+    def update_brand_profile_field(self, field_name: str, value: str, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("profile_field", {"field_name": field_name, "value": value, **kwargs}))
+        return {"version": 5, "is_active": True, field_name: value}
+
+    def activate_brand_profile(self, version: int, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("activate_profile", {"version": version, **kwargs}))
+        return {"version": version, "is_active": True}
+
 
 def _client(
     orchestrator: FakeOrchestrator | None = None,
@@ -628,6 +644,50 @@ def test_content_revision_rejects_unknown_operations_before_orchestration() -> N
         "/api/v1/content/21/revise",
         headers=_headers(),
         json={"revision_type": "invent_sources"},
+    )
+
+    assert response.status_code == 422
+    assert orchestrator.calls == []
+
+
+def test_profile_reads_and_field_edits_use_versioned_orchestrator_boundary() -> None:
+    orchestrator = FakeOrchestrator()
+    client = _client(orchestrator)
+
+    profile = client.get("/api/v1/profile", headers=_headers())
+    versions = client.get("/api/v1/profile/versions?limit=8", headers=_headers())
+    edited = client.patch(
+        "/api/v1/profile/field",
+        headers=_headers(),
+        json={"field_name": "content_pillars", "value": "AI products, product strategy"},
+    )
+    activated = client.post("/api/v1/profile/versions/3/activate", headers=_headers())
+
+    assert profile.json()["data"]["version"] == 4
+    assert len(versions.json()["data"]) == 2
+    assert edited.json()["data"]["version"] == 5
+    assert activated.json()["data"]["version"] == 3
+    assert orchestrator.calls == [
+        ("profile", {"database": "test.db"}),
+        ("profile_versions", {"database": "test.db", "limit": 8}),
+        (
+            "profile_field",
+            {
+                "field_name": "content_pillars",
+                "value": "AI products, product strategy",
+                "database": "test.db",
+            },
+        ),
+        ("activate_profile", {"version": 3, "database": "test.db"}),
+    ]
+
+
+def test_profile_field_contract_rejects_core_intent_or_unknown_fields() -> None:
+    orchestrator = FakeOrchestrator()
+    response = _client(orchestrator).patch(
+        "/api/v1/profile/field",
+        headers=_headers(),
+        json={"field_name": "core_intent", "value": "rewrite it"},
     )
 
     assert response.status_code == 422

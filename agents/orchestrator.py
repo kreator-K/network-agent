@@ -1271,7 +1271,7 @@ class NetworkOrchestrator:
         *,
         database: sqlite3.Connection | DatabaseRef,
     ) -> dict[str, Any] | None:
-        """Return concise active-profile fields for Telegram display."""
+        """Return concise active-profile fields for authenticated display."""
         try:
             profile = self.profile_context_agent.get_active_profile(database)
             return (
