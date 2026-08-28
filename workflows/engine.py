@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from workflows.contracts import (
     CancellationToken,
+    MAX_GRAPH_WORKERS,
     NodeContract,
     NodeExecutionError,
     NodeRunResult,
@@ -26,8 +27,10 @@ class GraphWorkflowEngine:
     """Execute a validated graph with bounded fan-out and isolated failures."""
 
     def __init__(self, *, max_workers: int = 4, fail_fast: bool = False) -> None:
-        if max_workers < 1:
-            raise ValueError("max_workers must be at least 1.")
+        if not 1 <= max_workers <= MAX_GRAPH_WORKERS:
+            raise ValueError(
+                f"max_workers must be between 1 and {MAX_GRAPH_WORKERS}."
+            )
         self.max_workers = max_workers
         self.fail_fast = fail_fast
 

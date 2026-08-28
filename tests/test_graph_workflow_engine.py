@@ -297,3 +297,9 @@ def test_fail_fast_mode_raises_without_exposing_provider_error() -> None:
 def test_retry_policy_rejects_unsafe_attempt_counts(attempts: int) -> None:
     with pytest.raises(GraphDefinitionError, match="max_attempts"):
         RetryPolicy(max_attempts=attempts)
+
+
+@pytest.mark.parametrize("workers", [0, 17])
+def test_engine_rejects_unsafe_worker_counts(workers: int) -> None:
+    with pytest.raises(ValueError, match="max_workers"):
+        GraphWorkflowEngine(max_workers=workers)

@@ -380,11 +380,37 @@ class SignalIntelligenceAgent:
             last_modified=source.last_modified,
         )
         try:
-            fetched = self.gateway(request)
+            fetched = self.fetch_source_request(request)
         except PublicSignalGatewayError as exc:
-            self._record_fetch(source_id, "failed", str(exc), None, None, database)
             logger.warning("Signal scan failed: source_id=%s", source_id)
-            return _scan_summary(source_id, "failed", errors=[str(exc)])
+            return self.persist_fetch_result(
+                source_id,
+                None,
+                database,
+                error=str(exc),
+            )
+        return self.persist_fetch_result(source_id, fetched, database)
+
+    def fetch_source_request(
+        self,
+        request: PublicSignalSourceRequest,
+    ) -> FeedFetchResult:
+        """Fetch one pre-authorized source without writing application state."""
+        return self.gateway(request)
+
+    def persist_fetch_result(
+        self,
+        source_id: int,
+        fetched: FeedFetchResult | None,
+        database: DatabaseRef,
+        *,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist one completed fetch through a controlled write boundary."""
+        if fetched is None:
+            safe_error = error or "Public feed request failed."
+            self._record_fetch(source_id, "failed", safe_error, None, None, database)
+            return _scan_summary(source_id, "failed", errors=[safe_error])
         self._record_fetch(
             source_id,
             "not_modified" if fetched.not_modified else "success",
@@ -650,8 +676,17 @@ class SignalIntelligenceAgent:
             treatment = _suggested_treatment(score, profile_data)
             title = str(row["title"] or "Public signal")
             audience = _first_profile_value(profile_data.target_audiences, "technology professionals")
-            headline = _opportunity_headline(title)
-            rationale = _opportunity_rationale(score, profile_data)
+            model_response = self.model_agent.run_task(
+                task_type="content_opportunity_generation",
+                prompt=_opportunity_generation_prompt(row, profile_data, score, audience),
+                expected_schema={"headline": str, "rationale": str, "suggested_angle": str},
+            )
+            model_headline, model_rationale, model_angle = _extract_opportunity_fields(model_response)
+            headline = model_headline or _opportunity_headline(title)
+            rationale = model_rationale or _opportunity_rationale(score, profile_data)
+            suggested_angle = model_angle or (
+                f"Analyze the practical implication of {title} through a verified, non-generic product lens."
+            )
             references = [{"signal_id": signal_id, "url": row["canonical_url"], "source": row["source_name"]}]
             now = _utc_now()
             cursor = connection.execute(
@@ -667,7 +702,7 @@ class SignalIntelligenceAgent:
                 """,
                 (
                     signal_id, row["profile_version"], row["scoring_config_version"], headline,
-                    f"Analyze the practical implication of {title} through a verified, non-generic product lens.",
+                    suggested_angle,
                     rationale, audience, _first_profile_value(profile_data.preferred_post_formats, "short analysis"),
                     treatment, _score_value(score, "humor_suitability"), deterministic["factual_risk"],
                     deterministic["generic_commentary_risk"], row["score_json"], row["total_score"],
@@ -1052,6 +1087,53 @@ def _score_value(score: dict[str, Any], field: str) -> float:
 
 def _opportunity_headline(title: str) -> str:
     return f"A product lens on {title}"[:200]
+
+
+def _opportunity_generation_prompt(
+    row: sqlite3.Row,
+    profile: PersonalBrandProfileData,
+    score: dict[str, Any],
+    audience: str,
+) -> str:
+    """Build a bounded, source-grounded opportunity prompt."""
+    deterministic = score.get("deterministic") or {}
+    return "\n".join(
+        [
+            "Prepare a review-only LinkedIn content opportunity, not a post draft.",
+            "Return JSON with headline, rationale, and suggested_angle.",
+            "Use only the supplied source and personal-brand profile.",
+            "Do not invent experience, credentials, outcomes, relationships, or source facts.",
+            f"Source title: {row['title'] or 'Untitled'}",
+            f"Source summary: {row['summary'] or 'No summary supplied.'}",
+            f"Source URL: {row['canonical_url']}",
+            f"Professional identity: {profile.professional_identity}",
+            f"Content pillars: {', '.join(profile.content_pillars)}",
+            f"Target audience: {audience}",
+            f"Topic relevance score: {deterministic.get('topic_relevance', 0)}",
+            "The headline must name a concrete angle. The rationale must explain profile fit. "
+            "The suggested angle must remain analytical and source-grounded.",
+        ]
+    )
+
+
+def _extract_opportunity_fields(
+    response: dict[str, Any],
+) -> tuple[str | None, str | None, str | None]:
+    """Return validated optional model fields; callers retain deterministic fallbacks."""
+    if response.get("fallback_used"):
+        return None, None, None
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return None, None, None
+
+    def field(name: str, maximum: int) -> str | None:
+        value = result.get(name)
+        if not isinstance(value, str):
+            return None
+        cleaned = " ".join(value.split())
+        return cleaned[:maximum] if cleaned else None
+
+    return field("headline", 200), field("rationale", 1000), field("suggested_angle", 1000)
 
 
 def _suggested_treatment(score: dict[str, Any], profile: PersonalBrandProfileData) -> str:

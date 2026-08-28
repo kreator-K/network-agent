@@ -13,6 +13,11 @@ from workflows.contracts import (
     WorkflowStatus,
 )
 from workflows.engine import GraphWorkflowEngine
+from workflows.signal_intelligence import (
+    SignalGraphConfigurationError,
+    run_signal_ingestion_graph,
+    signal_graph_preview,
+)
 
 __all__ = [
     "CancellationToken",
@@ -23,7 +28,10 @@ __all__ = [
     "NodeRunResult",
     "NodeStatus",
     "RetryPolicy",
+    "SignalGraphConfigurationError",
     "WorkflowDefinition",
     "WorkflowRunResult",
     "WorkflowStatus",
+    "run_signal_ingestion_graph",
+    "signal_graph_preview",
 ]

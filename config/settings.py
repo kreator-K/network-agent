@@ -78,6 +78,7 @@ class Settings:
     daily_briefing_enabled: bool = _env_bool("DAILY_BRIEFING_ENABLED", False)
     daily_briefing_time: str = os.getenv("DAILY_BRIEFING_TIME", "08:30")
     briefing_timezone: str = os.getenv("BRIEFING_TIMEZONE", "America/New_York")
+    # Telegram settings are migration-only; the active interface is web UI/API.
     briefing_telegram_chat_id: str = os.getenv("BRIEFING_TELEGRAM_CHAT_ID", "")
     max_sources_per_briefing_run: int = int(os.getenv("MAX_SOURCES_PER_BRIEFING_RUN", "5"))
     max_signals_per_briefing_run: int = int(os.getenv("MAX_SIGNALS_PER_BRIEFING_RUN", "10"))
@@ -100,6 +101,8 @@ class Settings:
     public_signal_max_redirects: int = int(
         os.getenv("PUBLIC_SIGNAL_MAX_REDIRECTS", "3")
     )
+    signal_graph_mode: str = os.getenv("SIGNAL_GRAPH_MODE", "disabled")
+    signal_graph_max_workers: int = int(os.getenv("SIGNAL_GRAPH_MAX_WORKERS", "4"))
     background_operation_timeout_seconds: int = int(
         os.getenv("BACKGROUND_OPERATION_TIMEOUT_SECONDS", "120")
     )

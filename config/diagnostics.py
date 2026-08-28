@@ -31,7 +31,6 @@ def configuration_diagnostics(current: Settings = settings) -> dict[str, Any]:
     """Return safe configuration state; values and secrets are never returned."""
     checks: list[dict[str, str | bool]] = []
     for name, value in (
-        ("TELEGRAM_BOT_TOKEN", current.telegram_bot_token),
         ("NVIDIA_API_KEY", current.nvidia_api_key),
         ("LINKEDIN_CLIENT_ID", current.linkedin_client_id),
         ("LINKEDIN_CLIENT_SECRET", current.linkedin_client_secret),
@@ -56,6 +55,11 @@ def configuration_diagnostics(current: Settings = settings) -> dict[str, Any]:
 
     checks.extend(
         [
+            _check(
+                "TELEGRAM_BOT_TOKEN",
+                True,
+                "legacy adapter optional; web UI/API is the active interface",
+            ),
             _check(
                 "TELEGRAM_ALLOWED_USER_IDS",
                 bool(current.telegram_allowed_user_ids.strip()) and all(
@@ -139,12 +143,14 @@ def configuration_diagnostics(current: Settings = settings) -> dict[str, Any]:
         "beta_access_ready": beta_access_ready,
         "checks": checks,
         "active_modes": {
+            "interface": "web_ui_pending",
             "model": "mock" if current.mock_mode else "real",
             "image": current.image_mode,
             "briefing": "enabled" if current.daily_briefing_enabled else "disabled",
             "linkedin": current.linkedin_publish_mode,
             "linkedin_real_write": current.linkedin_real_publish_enabled,
             "public_signal_http": current.public_signal_allow_http,
+            "signal_graph": current.signal_graph_mode,
         },
         "safe_defaults": {
             "linkedin_disabled": current.linkedin_publish_mode == "disabled" and not current.linkedin_real_publish_enabled,

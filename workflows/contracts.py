@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 NODE_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 MAX_GRAPH_NODES = 64
 MAX_NODE_ATTEMPTS = 3
+MAX_GRAPH_WORKERS = 16
 
 
 class GraphDefinitionError(ValueError):

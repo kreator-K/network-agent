@@ -22,6 +22,11 @@ from config.settings import settings
 from integrations.linkedin_oauth_callback import LinkedInCredentialStore, complete_linkedin_callback, local_linkedin_status
 from integrations.linkedin_oauth_client import LinkedInOAuthClient, LinkedInOAuthStateStore
 from integrations.linkedin_publishing_gateway import LinkedInPublishingGateway
+from workflows.signal_intelligence import (
+    SignalGraphConfigurationError,
+    run_signal_ingestion_graph,
+    signal_graph_preview,
+)
 
 
 DatabaseRef = str | Path
@@ -923,12 +928,46 @@ class NetworkOrchestrator:
         self,
         *,
         database: sqlite3.Connection | DatabaseRef,
+        graph_mode: str | None = None,
     ) -> dict[str, Any]:
-        """Manually scan all approved enabled sources without scheduling."""
+        """Scan approved sources through the control or feature-flagged graph path."""
         try:
-            return self.signal_intelligence_agent.ingest_enabled_sources(database)
+            mode = (graph_mode or settings.signal_graph_mode).strip().lower()
+            if mode not in {"disabled", "shadow", "enabled"}:
+                raise SignalGraphConfigurationError(
+                    "Signal graph mode must be disabled, shadow, or enabled."
+                )
+            if mode == "enabled":
+                if isinstance(database, sqlite3.Connection):
+                    raise SignalGraphConfigurationError(
+                        "Enabled signal graph execution requires a database path so "
+                        "worker-safe connections can be opened explicitly."
+                    )
+                return run_signal_ingestion_graph(
+                    self.signal_intelligence_agent,
+                    database,
+                    max_workers=settings.signal_graph_max_workers,
+                )
+            preview = (
+                signal_graph_preview(self.signal_intelligence_agent, database)
+                if mode == "shadow"
+                else None
+            )
+            result = self.signal_intelligence_agent.ingest_enabled_sources(database)
+            if preview is not None:
+                result["execution_mode"] = "control_with_graph_shadow"
+                result["graph_shadow"] = {
+                    **preview,
+                    "selection_parity": result["sources_scanned"]
+                    == preview["fetch_nodes"],
+                }
+            return result
         except Exception as exc:
-            _raise_with_context("scan_enabled_signal_sources", {}, exc)
+            _raise_with_context(
+                "scan_enabled_signal_sources",
+                {"graph_mode": graph_mode or settings.signal_graph_mode},
+                exc,
+            )
 
     def get_recent_signals(
         self,
@@ -1490,6 +1529,27 @@ class NetworkOrchestrator:
             _raise_with_context(
                 "revise_content_package",
                 {"post_id": post_id, "revision_type": revision_type},
+                exc,
+            )
+
+    def select_content_variant(
+        self,
+        post_id: int,
+        variant_number: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Promote one package variant without approving or publishing it."""
+        try:
+            return self.content_inspiration_agent.select_variant(
+                post_id,
+                variant_number,
+                database,
+            ).model_dump()
+        except Exception as exc:
+            _raise_with_context(
+                "select_content_variant",
+                {"post_id": post_id, "variant_number": variant_number},
                 exc,
             )
 

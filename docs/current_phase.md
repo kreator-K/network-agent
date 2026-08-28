@@ -47,9 +47,10 @@ UI/API.
 
 Graph Orchestration Foundation — Phase 0 complete; Phase 1 foundation complete.
 
-The typed in-process graph engine now validates workflow topology and Pydantic
-node contracts, executes independent nodes with bounded parallelism, isolates
-failed branches, caps retries, supports cooperative cancellation, and returns
-persistence-neutral run records. No active product workflow has been switched
-to the engine yet. The next implementation step is a feature-flagged,
-shadow-mode signal-intelligence graph.
+The typed in-process graph engine validates workflow topology and Pydantic node
+contracts, executes independent nodes with bounded parallelism, isolates failed
+branches, caps retries, supports cooperative cancellation, and returns
+persistence-neutral run records. Signal ingestion now has disabled, shadow, and
+enabled graph modes. It fetches approved sources concurrently and persists all
+results through one controlled SQLite write node. The default remains disabled;
+the next implementation step is the graph-backed content package workflow.

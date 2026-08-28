@@ -2,9 +2,8 @@
 
 ## Status
 
-Phase 0 contracts and the first Phase 1 in-process engine are implemented.
-This foundation does not change any active product workflow yet. Signal and
-content graphs will be integrated behind feature flags after parity tests.
+Phase 0 contracts, the Phase 1 in-process engine, and the feature-flagged signal
+ingestion graph are implemented. The default remains the existing control path.
 
 ## Boundary
 
@@ -46,9 +45,9 @@ but it cannot forcibly stop Python code already running in a worker thread.
 Durable cancellation and per-node execution timeouts belong to the later queue
 integration phase.
 
-## First Production Graph
+## Signal Ingestion Graph
 
-The first product integration will be the signal-intelligence workflow:
+The first product integration is the signal-intelligence workflow:
 
 1. Load approved sources.
 2. Fetch independent sources with bounded fan-out.
@@ -57,15 +56,24 @@ The first product integration will be the signal-intelligence workflow:
 5. Deterministically deduplicate and rank at a fan-in barrier.
 6. Create review-only opportunities.
 
-It will run in shadow mode against the existing sequential workflow before it
-becomes user-visible.
+`SIGNAL_GRAPH_MODE` controls rollout:
+
+- `disabled` keeps the sequential control path;
+- `shadow` runs the control path once and reports graph-selection parity without
+  issuing duplicate network requests or writes;
+- `enabled` executes the graph.
+
+Fetch nodes run concurrently, but `persist_fetches` owns one deterministic,
+sequential SQLite write boundary. Graph execution requires a database path and
+refuses a shared SQLite connection. The graph caps each run at 63 sources and
+the engine caps concurrency at 16 workers.
 
 ## Deferred Work
 
 - PostgreSQL-backed workflow and node records.
 - Durable queue delivery and deployment recovery.
 - Per-node timeouts and delayed retries.
-- Feature-flagged signal and content graph definitions.
+- Feature-flagged signal scoring and content graph definitions.
 - UI progress events and individual node retry controls.
 - Conditional model tiering.
 - Verifier panels and bounded convergent loops.
