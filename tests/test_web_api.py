@@ -212,6 +212,14 @@ def test_health_endpoint_is_public_and_minimal() -> None:
     }
 
 
+def test_readiness_endpoint_fails_closed_without_healthy_production_config() -> None:
+    response = _client(token="owner-secret").get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "not_ready"
+    assert response.json()["checks"]["api_auth_configured"] is False
+
+
 def test_api_denies_access_when_authentication_is_not_configured() -> None:
     response = _client(token="").get("/api/v1/signals")
 

@@ -1,0 +1,15 @@
+.git
+.codex
+.venv
+__pycache__
+*.pyc
+*.db
+*.sqlite*
+.env*
+secrets/
+backups/
+logs/
+runtime/
+web/node_modules/
+web/.next/
+tests/

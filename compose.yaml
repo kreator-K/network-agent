@@ -1,0 +1,23 @@
+services:
+  api:
+    build: .
+    env_file:
+      - .env.local
+    environment:
+      DATABASE_PATH: /data/network_agent.db
+      LINKEDIN_PUBLISH_MODE: disabled
+      LINKEDIN_REAL_PUBLISH_ENABLED: "false"
+    ports:
+      - "8000:8000"
+    volumes:
+      - network_agent_data:/data
+      - network_agent_backups:/backups
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  network_agent_data:
+  network_agent_backups:

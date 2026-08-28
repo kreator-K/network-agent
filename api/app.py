@@ -156,6 +156,7 @@ def create_app(
         debug=False,
         routes=[
             Route("/healthz", _health, methods=["GET"]),
+            Route("/readyz", _ready, methods=["GET"]),
             Route("/api/v1/diagnostics", _diagnostics, methods=["GET"]),
             Route("/api/v1/workflows/{run_id:str}", _workflow_run, methods=["GET"]),
             Route("/api/v1/workflows", _workflow_runs, methods=["GET"]),
@@ -211,6 +212,27 @@ def create_app(
 
 async def _health(_request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "service": "network-growth-agent"})
+
+
+async def _ready(request: Request) -> JSONResponse:
+    """Expose liveness-safe local readiness without returning configuration details."""
+    checks: dict[str, bool] = {
+        "database_integrity": False,
+        "api_auth_configured": len(str(request.app.state.api_token or "")) >= 32,
+        "publishing_disabled": settings.linkedin_publish_mode == "disabled" and not settings.linkedin_real_publish_enabled,
+    }
+    try:
+        from db.database import connect
+
+        with connect(_database(request)) as connection:
+            checks["database_integrity"] = connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    except (OSError, ValueError):
+        checks["database_integrity"] = False
+    ready = all(checks.values())
+    return JSONResponse(
+        {"status": "ready" if ready else "not_ready", "checks": checks},
+        status_code=200 if ready else 503,
+    )
 
 
 async def _diagnostics(request: Request) -> JSONResponse:

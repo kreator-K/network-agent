@@ -33,13 +33,19 @@ https://vercel.com/docs/functions/runtimes/python.
 ## Python API service
 
 The API host must provide Python 3.11, durable storage, HTTPS, backups, and one
-writable database owner. `scripts/pre_deploy.py` intentionally fails until:
+writable database owner. The provider-neutral `Dockerfile` and `compose.yaml`
+run the API on port 8000 with a named SQLite data volume. `scripts/pre_deploy.py`
+intentionally fails until:
 
 - `WEB_API_TOKEN` is at least 32 characters and matches the Vercel project;
 - LinkedIn real publishing remains disabled for initial deployment;
 - `DEPLOYMENT_PERSISTENCE_ACKNOWLEDGED=true` records an operator decision about
   durable storage and backups;
 - the configured SQLite database passes `PRAGMA integrity_check`.
+
+Expose `/healthz` for liveness and `/readyz` for readiness. Readiness returns
+503 unless the database is healthy, the API token is configured, and publishing
+is disabled. Keep the API behind HTTPS and a single-writer runtime.
 
 SQLite on an ephemeral or horizontally scaled serverless filesystem is not a
 supported production topology. Do not set the persistence acknowledgement
