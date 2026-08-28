@@ -38,6 +38,14 @@ def test_render_blueprint_starts_with_external_writes_disabled() -> None:
     assert "LINKEDIN_REDIRECT_URI" not in blueprint
 
 
+def test_render_container_runner_supports_direct_script_execution() -> None:
+    runner = (ROOT / "scripts" / "run_api.py").read_text(encoding="utf-8")
+
+    path_setup = runner.index("sys.path.insert")
+    project_import = runner.index("from config.settings import settings")
+    assert path_setup < project_import
+
+
 @pytest.mark.parametrize(("raw", "expected"), [(None, 8000), ("10000", 10000), ("65535", 65535)])
 def test_api_port_accepts_local_and_provider_ports(monkeypatch: pytest.MonkeyPatch, raw: str | None, expected: int) -> None:
     monkeypatch.delenv("PORT", raising=False)
