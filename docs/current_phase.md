@@ -57,5 +57,8 @@ support disabled, shadow, and enabled graph modes with typed research, hook,
 carousel, caption, evidence-verification, and bundle nodes. Both graph modes
 remain disabled by default. The authenticated ASGI web API foundation now
 provides owner-token-protected signal, opportunity, and draft-content routes
-through `NetworkOrchestrator`, plus a public minimal health route. The next
-implementation step is the Vercel frontend shell and typed API client.
+through `NetworkOrchestrator`, plus a public minimal health route. The Vercel
+frontend shell is implemented with Next.js 16.3.3, a responsive dashboard,
+Signals, Opportunities, and Content Studio routes, and a server-only typed API
+client. The next implementation step is web session identity and interactive
+actions.
