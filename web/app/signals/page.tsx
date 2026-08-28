@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/app-shell";
 import { requireSession } from "@/lib/session";
-export default async function SignalsPage() { await requireSession(); return <AppShell><Placeholder eyebrow="Evidence desk" title="Signals" copy="Scan approved sources, inspect provenance, and decide what deserves deeper analysis." /></AppShell>; }
-function Placeholder({ eyebrow, title, copy }: { eyebrow: string; title: string; copy: string }) { return <div className="page"><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><section className="panel placeholder"><h2>Workflow surface in progress</h2><p>{copy}</p></section></div>; }
+import { getSignals } from "@/lib/api";
+import { runSignalScan } from "./actions";
+export default async function SignalsPage() { await requireSession(); const signals = await getSignals(); return <AppShell><div className="page"><div className="pageHeader"><div><p className="eyebrow">Evidence desk</p><h1>Signals</h1></div><form action={runSignalScan}><button className="primaryAction" type="submit">Scan approved sources</button></form></div><section className="panel"><div className="signalList">{signals.length ? signals.map((signal) => <article key={signal.id}><span>#{signal.id}</span><div><strong>{signal.title || "Untitled signal"}</strong><p>{signal.source_name || "Approved source"}</p></div><b>{signal.status || "stored"}</b></article>) : <div className="empty"><strong>No stored signals.</strong><p>Run a scan after approving at least one RSS or Atom source.</p></div>}</div></section></div></AppShell>; }
