@@ -74,4 +74,12 @@ meeting confirmation, versioned personal-brand profiles, reviewed public-feed
 catalogs, content revision/variant controls, OAuth, frozen LinkedIn publishing
 previews, dry briefings, feedback, and legacy Telegram retirement. SQLite is the
 selected MVP database and is covered by the backup/restore and readiness gates.
-The next implementation step is selecting the durable Python API host.
+Phase 10 web deployment foundation is now complete for an owner-only demo:
+the Next.js web application is deployed on Vercel and the Python 3.11 API is
+deployed as one Render Free web service. Health, readiness, owner-session
+authentication, and server-to-server API calls have been verified.
+
+The Render Free filesystem is ephemeral, so SQLite data is intentionally demo
+only. The next private-beta step is moving the single-writer API and SQLite
+database to durable storage, validating backups, then separately configuring
+LinkedIn OAuth. Publishing remains disabled throughout the demo deployment.

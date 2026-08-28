@@ -5,7 +5,7 @@
 - Phase 8B — Public Signal Foundation: completed
 - Phase 8C — Relevance Scoring and Content Opportunities: completed
 - Phase 8D — Approval-ready Content Packages: completed
-- Phase 8E — Proactive Telegram Briefings: completed
+- Phase 8E — Proactive Briefings: completed
 - Phase 8F — Assisted Prospect Discovery: completed
 - Phase 8G-A — Safe LinkedIn Publishing Boundary: completed
 - Phase 8G-B1 — Official LinkedIn OAuth Foundation: completed
@@ -16,10 +16,9 @@
 - Phase 9 — Full Integration and Release Hardening: completed; release gate,
   deterministic cross-workflow regression, operational runbooks, backup and
   restore checks, and safe command inventory passed certification
-- Phase 10 — Deployment and Private Beta: in_progress; systemd packaging,
-  health/readiness, deny-by-default access, backups, rollback procedures, and
-  owner onboarding are implemented; live readiness awaits operator values for
-  the stable domain and Telegram owner IDs
+- Phase 10 — Web deployment foundation: completed for an owner-only Vercel +
+  Render Free demo. Private beta remains pending durable single-writer
+  persistence, backup verification, and reviewed multi-user access control.
 
 No Phase 11 is defined.
 

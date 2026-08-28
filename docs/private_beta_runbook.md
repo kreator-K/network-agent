@@ -1,14 +1,16 @@
 # Private Beta Runbook
 
-Start owner-only. Before admitting another user, add their numeric Telegram
-ID deliberately, explain that outreach is never sent automatically, and
-explain that a LinkedIn post becomes public only after final confirmation.
+Start owner-only with the Vercel web login. Before admitting another user,
+establish application-level identity and authorization; the current
+owner-password session is not a multi-user access-control system.
 
-Owner checklist: verify `/healthz`, `/readyz`, `/system_check`,
-`/linkedin_connection_status`, `/linkedin_publish_status`, Calendar status,
-backup creation, and safe logs. Keep `LINKEDIN_PUBLISH_MODE=disabled` and
+Owner checklist: verify the API `/healthz` and `/readyz`, an authenticated web
+session, the Profile page, backup creation and restore verification, and safe
+logs. Keep `LINKEDIN_PUBLISH_MODE=disabled` and
 `LINKEDIN_REAL_PUBLISH_ENABLED=false` during normal beta operation.
 
-Use `/feedback <message>` for local feedback and `/beta_status` for an
-admin-only summary. Revoke access by removing the numeric ID and restarting
-the bot. Do not add users by display name or username.
+Render Free must not be used for private beta because it resets local SQLite
+state. Promote to a durable single-writer host first. Never send outreach
+automatically; the user manually sends every outreach draft. A LinkedIn post
+requires a separately approved frozen request and explicit one-time web
+confirmation.
