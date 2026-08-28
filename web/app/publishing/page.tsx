@@ -2,6 +2,8 @@ import { AppShell } from "@/components/app-shell";
 import { getLinkedInPublishStatus, getPublishRequests } from "@/lib/api";
 import { requireSession } from "@/lib/session";
 import { PublishRequestControls } from "./request-controls";
+import { LinkedInConnection } from "./linkedin-connection";
+import { disconnectLinkedInAccount } from "./actions";
 
 export default async function PublishingPage() {
   await requireSession();
@@ -14,6 +16,13 @@ export default async function PublishingPage() {
       <article><span>Connection</span><strong>{status?.connection_status || "unavailable"}</strong><p>Member authorization and scope status.</p></article>
       <article><span>Awaiting confirmation</span><strong>{status?.pending_confirmations ?? 0}</strong><p>Each request is frozen and expires.</p></article>
     </div>
+    <section className="panel connectionPanel">
+      <div><p className="eyebrow">Account authorization</p><h2>LinkedIn connection</h2><p>OAuth grants identity and posting scope to the owner account. It never bypasses frozen-preview confirmation.</p></div>
+      <div>{status?.connection_status === "connected" ? <form action={disconnectLinkedInAccount}>
+        <input type="hidden" name="confirmation" value="DISCONNECT_LINKEDIN" />
+        <button className="secondaryAction" type="submit">Disconnect locally</button>
+      </form> : <LinkedInConnection />}</div>
+    </section>
     <section className="panel">
       <div className="panelTitle"><h2>Frozen request history</h2><span>Append-only audit lifecycle</span></div>
       <div className="publishList">{requests.length ? requests.map((request) => <article key={request.request_id}>

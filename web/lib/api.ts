@@ -65,6 +65,12 @@ export type PublishActionResult = {
   message?: string;
   request_id?: number;
 };
+export type LinkedInAuthorization = {
+  authorization_url: string;
+  expires_at: string;
+  scopes: string[];
+  message: string;
+};
 
 type ApiEnvelope<T> = { data: T };
 
@@ -165,6 +171,27 @@ export async function cancelPublishRequest(requestId: number): Promise<PublishAc
     method: "POST",
     body: JSON.stringify({ confirmation: "CANCEL_PUBLISH" }),
   }, null);
+}
+
+export async function startLinkedInAuthorization(): Promise<LinkedInAuthorization | null> {
+  return apiRequest<LinkedInAuthorization | null>("/api/v1/linkedin/authorization", {
+    method: "POST",
+    body: JSON.stringify({}),
+  }, null);
+}
+
+export async function completeLinkedInAuthorization(params: Record<string, string>): Promise<boolean> {
+  const query = new URLSearchParams(params);
+  const result = await apiRequest<unknown>(`/api/v1/linkedin/callback?${query.toString()}`, { method: "GET" }, null);
+  return result !== null;
+}
+
+export async function disconnectLinkedIn(): Promise<boolean> {
+  const result = await apiRequest<unknown>("/api/v1/linkedin/disconnect", {
+    method: "POST",
+    body: JSON.stringify({ confirmation: "DISCONNECT_LINKEDIN" }),
+  }, null);
+  return result !== null;
 }
 
 export async function scanSignals(): Promise<boolean> {

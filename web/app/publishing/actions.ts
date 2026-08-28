@@ -1,10 +1,27 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { cancelPublishRequest, confirmPublishRequest } from "@/lib/api";
+import { cancelPublishRequest, confirmPublishRequest, disconnectLinkedIn, startLinkedInAuthorization } from "@/lib/api";
 import { requireSession } from "@/lib/session";
 
 export type PublishState = { message: string; error: string };
+export type AuthorizationState = { authorizationUrl?: string; message: string; error: string };
+
+export async function beginLinkedInAuthorization(
+  _previous: AuthorizationState,
+): Promise<AuthorizationState> {
+  await requireSession();
+  const result = await startLinkedInAuthorization();
+  if (!result) return { message: "", error: "LinkedIn authorization could not be started. Check server configuration." };
+  return { authorizationUrl: result.authorization_url, message: result.message, error: "" };
+}
+
+export async function disconnectLinkedInAccount(formData: FormData) {
+  await requireSession();
+  if (String(formData.get("confirmation") || "") !== "DISCONNECT_LINKEDIN") return;
+  await disconnectLinkedIn();
+  revalidatePath("/publishing");
+}
 
 export async function actOnPublishRequest(
   _previous: PublishState,

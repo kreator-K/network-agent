@@ -55,6 +55,10 @@ class PublishCancellationRequest(ApiModel):
     confirmation: Literal["CANCEL_PUBLISH"]
 
 
+class LinkedInDisconnectRequest(ApiModel):
+    confirmation: Literal["DISCONNECT_LINKEDIN"]
+
+
 def create_app(
     *,
     orchestrator: NetworkOrchestrator | None = None,
@@ -86,6 +90,9 @@ def create_app(
             Route("/api/v1/prospects/{prospect_id:int}/outreach-draft", _outreach_draft, methods=["POST"]),
             Route("/api/v1/prospects/{prospect_id:int}/followup-draft", _followup_draft, methods=["POST"]),
             Route("/api/v1/linkedin/status", _linkedin_status, methods=["GET"]),
+            Route("/api/v1/linkedin/authorization", _linkedin_authorization, methods=["POST"]),
+            Route("/api/v1/linkedin/callback", _linkedin_callback, methods=["GET"]),
+            Route("/api/v1/linkedin/disconnect", _linkedin_disconnect, methods=["POST"]),
             Route("/api/v1/linkedin/publish-requests", _linkedin_publish_requests, methods=["GET", "POST"]),
             Route("/api/v1/linkedin/publish-requests/{request_id:int}", _linkedin_publish_request, methods=["GET"]),
             Route("/api/v1/linkedin/publish-requests/{request_id:int}/confirm", _confirm_linkedin_publish, methods=["POST"]),
@@ -345,6 +352,49 @@ async def _linkedin_status(request: Request) -> JSONResponse:
     return _delegate(
         request,
         lambda: _orchestrator(request).get_linkedin_publish_status(
+            database=_database(request),
+        ),
+    )
+
+
+async def _linkedin_authorization(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).prepare_linkedin_authorization(
+            telegram_user_id="web_owner",
+            telegram_chat_id="web_owner",
+            database=_database(request),
+        ),
+        status_code=201,
+    )
+
+
+async def _linkedin_callback(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).complete_linkedin_authorization(
+            dict(request.query_params),
+            database=_database(request),
+        ),
+    )
+
+
+async def _linkedin_disconnect(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    parsed = await _parse_body(request, LinkedInDisconnectRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).disconnect_linkedin(
             database=_database(request),
         ),
     )

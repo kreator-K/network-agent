@@ -97,6 +97,18 @@ class FakeOrchestrator:
         self.calls.append(("cancel_publish", {"request_id": request_id, **kwargs}))
         return {"request_id": request_id, "status": "cancelled"}
 
+    def prepare_linkedin_authorization(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("linkedin_authorization", kwargs))
+        return {"authorization_url": "https://www.linkedin.com/oauth/v2/authorization?state=safe", "scopes": ["openid", "profile", "w_member_social"]}
+
+    def complete_linkedin_authorization(self, params: dict[str, str], **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("linkedin_callback", {"params": params, **kwargs}))
+        return {"status": "connected", "member_display_name": "Owner"}
+
+    def disconnect_linkedin(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("linkedin_disconnect", kwargs))
+        return {"status": "revoked", "message": "Nothing was published."}
+
 
 def _client(
     orchestrator: FakeOrchestrator | None = None,
@@ -419,3 +431,66 @@ def test_publish_history_and_cancellation_are_auditable() -> None:
         ("publish_history", {"database": "test.db", "limit": 12}),
         ("cancel_publish", {"request_id": 31, "database": "test.db"}),
     ]
+
+
+def test_web_owner_can_start_and_complete_state_bound_oauth() -> None:
+    orchestrator = FakeOrchestrator()
+    client = _client(orchestrator)
+
+    started = client.post("/api/v1/linkedin/authorization", headers=_headers())
+    callback = client.get(
+        "/api/v1/linkedin/callback?code=provider-code&state=one-time-state",
+        headers=_headers(),
+    )
+
+    assert started.status_code == 201
+    assert started.json()["data"]["scopes"] == ["openid", "profile", "w_member_social"]
+    assert callback.json()["data"]["status"] == "connected"
+    assert orchestrator.calls == [
+        (
+            "linkedin_authorization",
+            {
+                "telegram_user_id": "web_owner",
+                "telegram_chat_id": "web_owner",
+                "database": "test.db",
+            },
+        ),
+        (
+            "linkedin_callback",
+            {
+                "params": {"code": "provider-code", "state": "one-time-state"},
+                "database": "test.db",
+            },
+        ),
+    ]
+
+
+def test_linkedin_callback_still_requires_internal_api_authentication() -> None:
+    orchestrator = FakeOrchestrator()
+    response = _client(orchestrator).get(
+        "/api/v1/linkedin/callback?code=provider-code&state=one-time-state"
+    )
+
+    assert response.status_code == 401
+    assert orchestrator.calls == []
+
+
+def test_linkedin_disconnect_requires_exact_confirmation_contract() -> None:
+    orchestrator = FakeOrchestrator()
+    client = _client(orchestrator)
+
+    invalid = client.post(
+        "/api/v1/linkedin/disconnect",
+        headers=_headers(),
+        json={"confirmation": "sure"},
+    )
+    valid = client.post(
+        "/api/v1/linkedin/disconnect",
+        headers=_headers(),
+        json={"confirmation": "DISCONNECT_LINKEDIN"},
+    )
+
+    assert invalid.status_code == 422
+    assert valid.status_code == 200
+    assert valid.json()["data"]["status"] == "revoked"
+    assert orchestrator.calls == [("linkedin_disconnect", {"database": "test.db"})]
