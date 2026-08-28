@@ -64,7 +64,7 @@ class CallbackHandler(BaseHTTPRequestHandler):
             if marker in text:
                 reference = text[text.index(marker):].split(":", 1)[0]
             suffix = f"<p>Reference: {reference}</p>" if reference else ""
-            body = ("<!doctype html><html><body><p>LinkedIn authorization could not be completed.</p>" + suffix + "<p>Return to Telegram and run /linkedin_connect again.</p></body></html>").encode("utf-8")
+            body = ("<!doctype html><html><body><p>LinkedIn authorization could not be completed.</p>" + suffix + "<p>Return to the web app and try connecting LinkedIn again.</p></body></html>").encode("utf-8")
             self.send_response(400)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")

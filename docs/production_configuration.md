@@ -1,9 +1,10 @@
 # Production Configuration
 
-Runtime loads only `.env.local`. Required deployment values include Telegram
-token, numeric allowed/admin IDs, absolute database and storage paths, stable
-HTTPS callback URI, LinkedIn OAuth values, encrypted-token key, Calendar MCP
-paths/account, and model/image settings. Diagnostics report only configured,
+Runtime loads only `.env.local`. Required deployment values include an
+authenticated web API token/session configuration, absolute database and
+storage paths, stable HTTPS callback URI, LinkedIn OAuth values, encrypted-token
+key, Calendar MCP paths/account, and model/image settings. Telegram values are
+migration-only and are not required for web deployment. Diagnostics report only configured,
 missing, valid, invalid, and selected modes.
 
 Safe initial values:

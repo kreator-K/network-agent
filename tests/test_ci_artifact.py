@@ -23,3 +23,10 @@ def test_ci_keeps_provider_writes_disabled_and_uses_read_only_permissions() -> N
     assert "LINKEDIN_PUBLISH_MODE: disabled" in workflow
     assert 'LINKEDIN_REAL_PUBLISH_ENABLED: "false"' in workflow
     assert "OPENAI_API_KEY" not in workflow
+
+
+def test_active_web_deployment_docs_do_not_require_telegram() -> None:
+    for name in ("docs/production_configuration.md", "docs/phase10_deployment_private_beta.md"):
+        text = (ROOT / name).read_text(encoding="utf-8").lower()
+        assert "required deployment values include telegram" not in text
+        assert "telegram bot process" not in text
