@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { approveContentPackage, preparePublishRequest } from "@/lib/api";
+import { approveContentPackage, preparePublishRequest, reviseContentPackage, selectContentVariant } from "@/lib/api";
 import { requireSession } from "@/lib/session";
 
 export type FreezeState = {
@@ -16,6 +16,25 @@ export async function approvePackage(formData: FormData) {
   const postId = positiveInteger(formData.get("post_id"));
   if (!postId) return;
   await approveContentPackage(postId);
+  revalidatePath("/studio");
+}
+
+export async function revisePackage(formData: FormData) {
+  await requireSession();
+  const postId = positiveInteger(formData.get("post_id"));
+  const revisionType = String(formData.get("revision_type") || "");
+  const revisionNotes = String(formData.get("revision_notes") || "").trim();
+  if (!postId || !revisionType) return;
+  await reviseContentPackage(postId, revisionType, revisionNotes);
+  revalidatePath("/studio");
+}
+
+export async function chooseVariant(formData: FormData) {
+  await requireSession();
+  const postId = positiveInteger(formData.get("post_id"));
+  const variantNumber = positiveInteger(formData.get("variant_number"));
+  if (!postId || !variantNumber || variantNumber > 3) return;
+  await selectContentVariant(postId, variantNumber);
   revalidatePath("/studio");
 }
 

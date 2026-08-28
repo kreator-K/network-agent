@@ -3,6 +3,7 @@ import { getContentPackages } from "@/lib/api";
 import { requireSession } from "@/lib/session";
 import { approvePackage } from "./actions";
 import { FreezeRequestForm } from "./freeze-request-form";
+import { ContentControls } from "./content-controls";
 
 export default async function StudioPage() {
   await requireSession();
@@ -19,6 +20,7 @@ export default async function StudioPage() {
           <p>{item.draft_text}</p>
         </div>
         <div className="contentActions">
+          <ContentControls postId={item.id} />
           {item.status !== "approved_for_later_posting" ? <form action={approvePackage}>
             <input type="hidden" name="post_id" value={item.id} />
             <button className="primaryAction" type="submit">Approve for later</button>

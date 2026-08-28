@@ -231,6 +231,22 @@ export async function confirmMeeting(prospectId: number, input: {
   return result !== null;
 }
 
+export async function reviseContentPackage(postId: number, revisionType: string, revisionNotes?: string): Promise<boolean> {
+  const result = await apiRequest<unknown>(`/api/v1/content/${postId}/revise`, {
+    method: "POST",
+    body: JSON.stringify({ revision_type: revisionType, revision_notes: revisionNotes || null }),
+  }, null);
+  return result !== null;
+}
+
+export async function selectContentVariant(postId: number, variantNumber: number): Promise<boolean> {
+  const result = await apiRequest<unknown>(`/api/v1/content/${postId}/select-variant`, {
+    method: "POST",
+    body: JSON.stringify({ variant_number: variantNumber }),
+  }, null);
+  return result !== null;
+}
+
 export async function scanSignals(): Promise<boolean> {
   const result = await apiRequest<unknown>("/api/v1/signals/scan", {
     method: "POST",

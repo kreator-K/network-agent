@@ -72,6 +72,26 @@ class MeetingConfirmationRequest(MeetingPreviewRequest):
     confirmation: Literal["MEETING_CONFIRMED"]
 
 
+class ContentRevisionRequest(ApiModel):
+    revision_type: Literal[
+        "make_more_personal",
+        "make_more_analytical",
+        "make_more_concise",
+        "make_more_practical",
+        "make_lighter",
+        "make_funnier",
+        "reduce_hype",
+        "change_target_audience",
+        "regenerate_hook",
+        "custom_revision",
+    ]
+    revision_notes: str | None = Field(default=None, max_length=2000)
+
+
+class ContentVariantRequest(ApiModel):
+    variant_number: int = Field(ge=1, le=3)
+
+
 def create_app(
     *,
     orchestrator: NetworkOrchestrator | None = None,
@@ -98,6 +118,8 @@ def create_app(
             Route("/api/v1/content/{post_id:int}", _content_package, methods=["GET"]),
             Route("/api/v1/content/{post_id:int}/approve", _approve_content_package, methods=["POST"]),
             Route("/api/v1/content/{post_id:int}/publish-readiness", _content_publish_readiness, methods=["GET"]),
+            Route("/api/v1/content/{post_id:int}/revise", _revise_content_package, methods=["POST"]),
+            Route("/api/v1/content/{post_id:int}/select-variant", _select_content_variant, methods=["POST"]),
             Route("/api/v1/prospects", _prospects, methods=["GET", "POST"]),
             Route("/api/v1/prospects/followups-due", _followups_due, methods=["GET"]),
             Route("/api/v1/prospects/{prospect_id:int}/outreach-draft", _outreach_draft, methods=["POST"]),
@@ -281,6 +303,43 @@ async def _content_publish_readiness(request: Request) -> JSONResponse:
         request,
         lambda: _orchestrator(request).get_content_publish_readiness(
             int(request.path_params["post_id"]),
+            database=_database(request),
+        ),
+    )
+
+
+async def _revise_content_package(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    parsed = await _parse_body(request, ContentRevisionRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    revision = cast(ContentRevisionRequest, parsed)
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).revise_content_package(
+            int(request.path_params["post_id"]),
+            revision.revision_type,
+            revision.revision_notes,
+            database=_database(request),
+        ),
+    )
+
+
+async def _select_content_variant(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    parsed = await _parse_body(request, ContentVariantRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    variant = cast(ContentVariantRequest, parsed)
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).select_content_variant(
+            int(request.path_params["post_id"]),
+            variant.variant_number,
             database=_database(request),
         ),
     )

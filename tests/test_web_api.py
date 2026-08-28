@@ -117,6 +117,14 @@ class FakeOrchestrator:
         self.calls.append(("meeting_confirmation", {"prospect_id": prospect_id, **kwargs}))
         return {"calendar_synced": True, "calendar_block": {"prospect_id": prospect_id}}
 
+    def revise_content_package(self, post_id: int, revision_type: str, revision_notes: str | None, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("revise_content", {"post_id": post_id, "revision_type": revision_type, "revision_notes": revision_notes, **kwargs}))
+        return {"id": post_id, "package_version": 3, "status": "draft"}
+
+    def select_content_variant(self, post_id: int, variant_number: int, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("select_variant", {"post_id": post_id, "variant_number": variant_number, **kwargs}))
+        return {"id": post_id, "package_version": 3, "status": "draft"}
+
 
 def _client(
     orchestrator: FakeOrchestrator | None = None,
@@ -581,3 +589,46 @@ def test_meeting_confirmation_runs_only_with_exact_confirmation() -> None:
             },
         )
     ]
+
+
+def test_content_revision_and_variant_selection_are_typed_review_actions() -> None:
+    orchestrator = FakeOrchestrator()
+    client = _client(orchestrator)
+
+    revised = client.post(
+        "/api/v1/content/21/revise",
+        headers=_headers(),
+        json={"revision_type": "make_more_concise", "revision_notes": "Keep the source caveat."},
+    )
+    selected = client.post(
+        "/api/v1/content/21/select-variant",
+        headers=_headers(),
+        json={"variant_number": 2},
+    )
+
+    assert revised.status_code == 200
+    assert selected.status_code == 200
+    assert orchestrator.calls == [
+        (
+            "revise_content",
+            {
+                "post_id": 21,
+                "revision_type": "make_more_concise",
+                "revision_notes": "Keep the source caveat.",
+                "database": "test.db",
+            },
+        ),
+        ("select_variant", {"post_id": 21, "variant_number": 2, "database": "test.db"}),
+    ]
+
+
+def test_content_revision_rejects_unknown_operations_before_orchestration() -> None:
+    orchestrator = FakeOrchestrator()
+    response = _client(orchestrator).post(
+        "/api/v1/content/21/revise",
+        headers=_headers(),
+        json={"revision_type": "invent_sources"},
+    )
+
+    assert response.status_code == 422
+    assert orchestrator.calls == []
