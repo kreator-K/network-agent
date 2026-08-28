@@ -1152,13 +1152,13 @@ class NetworkOrchestrator:
         """Mark a future-drafting candidate without generating a post."""
         return self._transition_content_opportunity(opportunity_id, "selected", database=database)
 
-    def record_signal_preference(self, signal_id: int, feedback_type: str, *, database: sqlite3.Connection | DatabaseRef, note: str | None = None) -> None:
+    def record_signal_preference(self, signal_id: int, feedback_type: str, *, database: sqlite3.Connection | DatabaseRef, note: str | None = None, source: str = "telegram") -> None:
         """Store user feedback only; no profile or weight mutation follows."""
-        self._record_content_preference("signal", signal_id, feedback_type, database, note)
+        self._record_content_preference("signal", signal_id, feedback_type, database, note, source)
 
-    def record_opportunity_preference(self, opportunity_id: int, feedback_type: str, *, database: sqlite3.Connection | DatabaseRef, note: str | None = None) -> None:
+    def record_opportunity_preference(self, opportunity_id: int, feedback_type: str, *, database: sqlite3.Connection | DatabaseRef, note: str | None = None, source: str = "telegram") -> None:
         """Store opportunity feedback only; no content drafting follows."""
-        self._record_content_preference("opportunity", opportunity_id, feedback_type, database, note)
+        self._record_content_preference("opportunity", opportunity_id, feedback_type, database, note, source)
 
     def _transition_content_opportunity(self, opportunity_id: int, status: str, reason: str | None = None, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
         try:
@@ -1166,9 +1166,9 @@ class NetworkOrchestrator:
         except Exception as exc:
             _raise_with_context("transition_content_opportunity", {"opportunity_id": opportunity_id, "status": status}, exc)
 
-    def _record_content_preference(self, target_type: str, target_id: int, feedback_type: str, database: sqlite3.Connection | DatabaseRef, note: str | None) -> None:
+    def _record_content_preference(self, target_type: str, target_id: int, feedback_type: str, database: sqlite3.Connection | DatabaseRef, note: str | None, source: str) -> None:
         try:
-            self.signal_intelligence_agent.record_preference(target_type, target_id, feedback_type, database, note)
+            self.signal_intelligence_agent.record_preference(target_type, target_id, feedback_type, database, note, source)
         except Exception as exc:
             _raise_with_context("record_content_preference", {"target_type": target_type, "target_id": target_id}, exc)
 
@@ -1471,7 +1471,7 @@ class NetworkOrchestrator:
                 connection.close()
 
     def get_briefing_status(self, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
-        """Return safe operational briefing state for Telegram display."""
+        """Return safe operational briefing state for authenticated display."""
         connection, should_close = _coerce_connection(database)
         try:
             config = connection.execute("SELECT * FROM briefing_settings WHERE id = 1").fetchone()

@@ -120,6 +120,21 @@ class BrandProfileFieldRequest(ApiModel):
     value: str = Field(max_length=5000)
 
 
+class ContentFeedbackRequest(ApiModel):
+    feedback_type: Literal[
+        "more_like_this",
+        "less_like_this",
+        "save",
+        "dismiss",
+        "not_relevant",
+        "too_generic",
+        "too_risky",
+        "good_angle",
+        "wrong_audience",
+    ]
+    note: str | None = Field(default=None, max_length=1000)
+
+
 def create_app(
     *,
     orchestrator: NetworkOrchestrator | None = None,
@@ -136,7 +151,9 @@ def create_app(
             Route("/api/v1/workflows", _workflow_runs, methods=["GET"]),
             Route("/api/v1/signals", _signals, methods=["GET"]),
             Route("/api/v1/signals/scan", _scan_signals, methods=["POST"]),
+            Route("/api/v1/signals/{signal_id:int}/feedback", _signal_feedback, methods=["POST"]),
             Route("/api/v1/opportunities", _opportunities, methods=["GET"]),
+            Route("/api/v1/opportunities/{opportunity_id:int}/feedback", _opportunity_feedback, methods=["POST"]),
             Route(
                 "/api/v1/opportunities/{opportunity_id:int}/content-package",
                 _generate_content_package,
@@ -166,6 +183,9 @@ def create_app(
             Route("/api/v1/profile/field", _update_brand_profile_field, methods=["PATCH"]),
             Route("/api/v1/profile/versions", _brand_profile_versions, methods=["GET"]),
             Route("/api/v1/profile/versions/{version:int}/activate", _activate_brand_profile, methods=["POST"]),
+            Route("/api/v1/briefings/status", _briefing_status, methods=["GET"]),
+            Route("/api/v1/briefings/runs", _briefing_runs, methods=["GET"]),
+            Route("/api/v1/briefings/run-dry", _run_dry_briefing, methods=["POST"]),
         ],
     )
     application.state.orchestrator = orchestrator or NetworkOrchestrator()
@@ -249,6 +269,32 @@ async def _scan_signals(request: Request) -> JSONResponse:
     )
 
 
+async def _signal_feedback(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    parsed = await _parse_body(request, ContentFeedbackRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    feedback = cast(ContentFeedbackRequest, parsed)
+    return _delegate(
+        request,
+        lambda: _record_signal_feedback(request, feedback),
+        status_code=201,
+    )
+
+
+def _record_signal_feedback(request: Request, feedback: ContentFeedbackRequest) -> dict[str, str]:
+    _orchestrator(request).record_signal_preference(
+        int(request.path_params["signal_id"]),
+        feedback.feedback_type,
+        database=_database(request),
+        note=feedback.note,
+        source="web_api",
+    )
+    return {"status": "recorded"}
+
+
 async def _opportunities(request: Request) -> JSONResponse:
     denied = _authorize(request)
     if denied:
@@ -265,6 +311,32 @@ async def _opportunities(request: Request) -> JSONResponse:
             limit=limit,
         ),
     )
+
+
+async def _opportunity_feedback(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    parsed = await _parse_body(request, ContentFeedbackRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    feedback = cast(ContentFeedbackRequest, parsed)
+    return _delegate(
+        request,
+        lambda: _record_opportunity_feedback(request, feedback),
+        status_code=201,
+    )
+
+
+def _record_opportunity_feedback(request: Request, feedback: ContentFeedbackRequest) -> dict[str, str]:
+    _orchestrator(request).record_opportunity_preference(
+        int(request.path_params["opportunity_id"]),
+        feedback.feedback_type,
+        database=_database(request),
+        note=feedback.note,
+        source="web_api",
+    )
+    return {"status": "recorded"}
 
 
 async def _generate_content_package(request: Request) -> JSONResponse:
@@ -672,6 +744,47 @@ async def _activate_brand_profile(request: Request) -> JSONResponse:
             int(request.path_params["version"]),
             database=_database(request),
         ),
+    )
+
+
+async def _briefing_status(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).get_briefing_status(database=_database(request)),
+    )
+
+
+async def _briefing_runs(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    limit = _bounded_limit(request, default=20)
+    if isinstance(limit, JSONResponse):
+        return limit
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).list_briefing_runs(
+            database=_database(request),
+            limit=limit,
+        ),
+    )
+
+
+async def _run_dry_briefing(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).build_daily_briefing(
+            database=_database(request),
+            run_type="manual_web",
+            dry_run=True,
+        ),
+        status_code=202,
     )
 
 

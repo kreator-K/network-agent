@@ -141,6 +141,24 @@ class FakeOrchestrator:
         self.calls.append(("activate_profile", {"version": version, **kwargs}))
         return {"version": version, "is_active": True}
 
+    def record_signal_preference(self, signal_id: int, feedback_type: str, **kwargs: Any) -> None:
+        self.calls.append(("signal_feedback", {"signal_id": signal_id, "feedback_type": feedback_type, **kwargs}))
+
+    def record_opportunity_preference(self, opportunity_id: int, feedback_type: str, **kwargs: Any) -> None:
+        self.calls.append(("opportunity_feedback", {"opportunity_id": opportunity_id, "feedback_type": feedback_type, **kwargs}))
+
+    def get_briefing_status(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("briefing_status", kwargs))
+        return {"enabled": False, "dry_run": True, "last_run": None}
+
+    def list_briefing_runs(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.calls.append(("briefing_runs", kwargs))
+        return [{"id": 7, "status": "completed", "run_type": "manual_web"}]
+
+    def build_daily_briefing(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("run_briefing", kwargs))
+        return {"run_id": 8, "status": "completed", "dry_run": True}
+
 
 def _client(
     orchestrator: FakeOrchestrator | None = None,
@@ -692,3 +710,43 @@ def test_profile_field_contract_rejects_core_intent_or_unknown_fields() -> None:
 
     assert response.status_code == 422
     assert orchestrator.calls == []
+
+
+def test_feedback_is_stored_without_triggering_generation_or_profile_mutation() -> None:
+    orchestrator = FakeOrchestrator()
+    client = _client(orchestrator)
+    signal = client.post(
+        "/api/v1/signals/4/feedback",
+        headers=_headers(),
+        json={"feedback_type": "more_like_this", "note": "Useful evidence"},
+    )
+    opportunity = client.post(
+        "/api/v1/opportunities/5/feedback",
+        headers=_headers(),
+        json={"feedback_type": "too_generic"},
+    )
+
+    assert signal.status_code == 201
+    assert opportunity.status_code == 201
+    assert orchestrator.calls == [
+        ("signal_feedback", {"signal_id": 4, "feedback_type": "more_like_this", "database": "test.db", "note": "Useful evidence", "source": "web_api"}),
+        ("opportunity_feedback", {"opportunity_id": 5, "feedback_type": "too_generic", "database": "test.db", "note": None, "source": "web_api"}),
+    ]
+
+
+def test_manual_web_briefing_is_forced_to_dry_run() -> None:
+    orchestrator = FakeOrchestrator()
+    client = _client(orchestrator)
+    status = client.get("/api/v1/briefings/status", headers=_headers())
+    runs = client.get("/api/v1/briefings/runs?limit=6", headers=_headers())
+    run = client.post("/api/v1/briefings/run-dry", headers=_headers())
+
+    assert status.status_code == 200
+    assert runs.status_code == 200
+    assert run.status_code == 202
+    assert run.json()["data"]["dry_run"] is True
+    assert orchestrator.calls == [
+        ("briefing_status", {"database": "test.db"}),
+        ("briefing_runs", {"database": "test.db", "limit": 6}),
+        ("run_briefing", {"database": "test.db", "run_type": "manual_web", "dry_run": True}),
+    ]

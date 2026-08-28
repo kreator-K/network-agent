@@ -95,6 +95,24 @@ export type BrandProfileSummary = {
   preferred_tone?: string[];
   preferred_depth?: string | null;
 };
+export type BriefingStatus = {
+  enabled: boolean;
+  briefing_time: string;
+  timezone: string;
+  dry_run: boolean;
+  last_run: BriefingRun | null;
+};
+export type BriefingRun = {
+  id: number;
+  run_type: string;
+  status: string;
+  scheduled_for?: string;
+  completed_at?: string | null;
+  new_signals_count?: number;
+  opportunities_created_count?: number;
+  packages_prepared_count?: number;
+  followups_due_count?: number;
+};
 
 type ApiEnvelope<T> = { data: T };
 
@@ -279,6 +297,38 @@ export async function updateBrandProfileField(fieldName: string, value: string):
 
 export async function activateBrandProfile(version: number): Promise<boolean> {
   const result = await apiRequest<unknown>(`/api/v1/profile/versions/${version}/activate`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  }, null);
+  return result !== null;
+}
+
+export async function recordSignalFeedback(signalId: number, feedbackType: string): Promise<boolean> {
+  const result = await apiRequest<unknown>(`/api/v1/signals/${signalId}/feedback`, {
+    method: "POST",
+    body: JSON.stringify({ feedback_type: feedbackType }),
+  }, null);
+  return result !== null;
+}
+
+export async function recordOpportunityFeedback(opportunityId: number, feedbackType: string): Promise<boolean> {
+  const result = await apiRequest<unknown>(`/api/v1/opportunities/${opportunityId}/feedback`, {
+    method: "POST",
+    body: JSON.stringify({ feedback_type: feedbackType }),
+  }, null);
+  return result !== null;
+}
+
+export async function getBriefingStatus(): Promise<BriefingStatus | null> {
+  return apiRequest<BriefingStatus | null>("/api/v1/briefings/status", { method: "GET" }, null);
+}
+
+export async function getBriefingRuns(): Promise<BriefingRun[]> {
+  return apiRequest<BriefingRun[]>("/api/v1/briefings/runs?limit=20", { method: "GET" }, []);
+}
+
+export async function runDryBriefing(): Promise<boolean> {
+  const result = await apiRequest<unknown>("/api/v1/briefings/run-dry", {
     method: "POST",
     body: JSON.stringify({}),
   }, null);
