@@ -33,6 +33,10 @@ class FakeOrchestrator:
         self.calls.append(("content", {"post_id": post_id, **kwargs}))
         return {"id": post_id, "status": "draft"}
 
+    def get_workflow_run(self, run_id: str, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("workflow", {"run_id": run_id, **kwargs}))
+        return {"run_id": run_id, "status": "completed"}
+
 
 def _client(
     orchestrator: FakeOrchestrator | None = None,
@@ -152,3 +156,17 @@ def test_internal_orchestrator_errors_return_generic_envelope() -> None:
     assert response.json()["error"]["code"] == "operation_failed"
     assert "database password" not in response.text
     assert response.json()["error"]["request_id"]
+
+
+def test_workflow_receipt_route_is_authenticated_and_delegated() -> None:
+    orchestrator = FakeOrchestrator()
+    response = _client(orchestrator).get(
+        "/api/v1/workflows/run-123",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["run_id"] == "run-123"
+    assert orchestrator.calls == [
+        ("workflow", {"run_id": "run-123", "database": "test.db"})
+    ]

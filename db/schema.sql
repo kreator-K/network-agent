@@ -445,6 +445,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_signal_scoring_config
 ON signal_scoring_config(is_active) WHERE is_active = 1;
 CREATE INDEX IF NOT EXISTS idx_content_opportunities_status_score
 ON content_opportunities(status, total_score DESC);
+
+CREATE TABLE IF NOT EXISTS workflow_runs (
+    run_id TEXT PRIMARY KEY,
+    workflow_name TEXT NOT NULL,
+    workflow_version INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workflow_node_runs (
+    run_id TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    node_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL,
+    output_json TEXT,
+    error_code TEXT,
+    error_detail TEXT,
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, node_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_name_created
+    ON workflow_runs(workflow_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workflow_node_runs_status
+    ON workflow_node_runs(status, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_active_opportunity_per_signal_config
 ON content_opportunities(primary_signal_id, profile_version, scoring_config_version)
 WHERE status IN ('candidate', 'saved', 'selected');

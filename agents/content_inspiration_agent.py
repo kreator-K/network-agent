@@ -42,6 +42,8 @@ from workflows.content_creation import (
     content_graph_preview,
     run_content_artifact_graph,
 )
+from workflows.contracts import WorkflowRunResult
+from workflows.persistence import save_workflow_run
 
 
 WRITING_STYLE_INSTRUCTIONS = """Writing style:
@@ -264,6 +266,14 @@ class ContentInspirationAgent:
                 hook = bundle.hook
                 carousel = bundle.carousel
                 caption = bundle.caption
+                save_workflow_run(
+                    connection,
+                    WorkflowRunResult.model_validate(generation_workflow),
+                    metadata={
+                        "opportunity_id": opportunity_id,
+                        "artifact_type": "content_package",
+                    },
+                )
             else:
                 research = self.content_research_agent.build_brief(
                     references, source_rows, package.factual_claims

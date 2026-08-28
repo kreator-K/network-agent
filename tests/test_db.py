@@ -40,6 +40,8 @@ EXPECTED_TABLES = [
     "signal_scoring_config",
     "signal_sources",
     "signals",
+    "workflow_node_runs",
+    "workflow_runs",
 ]
 
 

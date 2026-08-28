@@ -42,6 +42,7 @@ def create_app(
         routes=[
             Route("/healthz", _health, methods=["GET"]),
             Route("/api/v1/diagnostics", _diagnostics, methods=["GET"]),
+            Route("/api/v1/workflows/{run_id:str}", _workflow_run, methods=["GET"]),
             Route("/api/v1/signals", _signals, methods=["GET"]),
             Route("/api/v1/signals/scan", _scan_signals, methods=["POST"]),
             Route("/api/v1/opportunities", _opportunities, methods=["GET"]),
@@ -82,6 +83,20 @@ async def _signals(request: Request) -> JSONResponse:
         lambda: _orchestrator(request).get_recent_signals(
             database=_database(request),
             limit=limit,
+        ),
+    )
+
+
+async def _workflow_run(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    run_id = str(request.path_params["run_id"])
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).get_workflow_run(
+            run_id,
+            database=_database(request),
         ),
     )
 

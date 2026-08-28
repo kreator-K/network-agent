@@ -27,6 +27,7 @@ from workflows.signal_intelligence import (
     run_signal_ingestion_graph,
     signal_graph_preview,
 )
+from workflows.persistence import get_workflow_run
 
 
 DatabaseRef = str | Path
@@ -980,6 +981,18 @@ class NetworkOrchestrator:
             return self.signal_intelligence_agent.get_recent_signals(database, limit)
         except Exception as exc:
             _raise_with_context("get_recent_signals", {}, exc)
+
+    def get_workflow_run(
+        self,
+        run_id: str,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Return one append-only graph execution receipt."""
+        try:
+            return get_workflow_run(database, run_id)
+        except Exception as exc:
+            _raise_with_context("get_workflow_run", {"run_id": run_id}, exc)
 
     def score_signal(
         self, signal_id: int, *, database: sqlite3.Connection | DatabaseRef

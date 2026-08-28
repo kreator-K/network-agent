@@ -18,6 +18,7 @@ from integrations.public_signal_gateway import (
 )
 from workflows.contracts import MAX_GRAPH_NODES, NodeContract, WorkflowDefinition
 from workflows.engine import GraphWorkflowEngine
+from workflows.persistence import save_workflow_run
 
 
 logger = logging.getLogger(__name__)
@@ -164,6 +165,11 @@ def run_signal_ingestion_graph(
     run = GraphWorkflowEngine(max_workers=max_workers).run(
         definition,
         {"source_ids": source_ids},
+    )
+    save_workflow_run(
+        database,
+        run,
+        metadata={"source_ids": source_ids, "execution_mode": "graph"},
     )
     persisted = run.nodes["persist_fetches"]
     if persisted.output is None:

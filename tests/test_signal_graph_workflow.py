@@ -18,6 +18,7 @@ from integrations.public_signal_gateway import (
     RawFeedItem,
 )
 from workflows.signal_intelligence import run_signal_ingestion_graph
+from workflows.persistence import get_workflow_run
 
 
 def _database_path(tmp_path: Path, name: str = "network_agent.db") -> Path:
@@ -92,6 +93,8 @@ def test_signal_graph_fetches_independent_sources_in_parallel_then_persists(
     assert result["workflow"]["status"] == "completed"
     assert result["workflow"]["nodes"]["persist_fetches"]["attempts"] == 1
     assert len(agent.get_recent_signals(database)) == 2
+    stored = get_workflow_run(database, result["workflow"]["run_id"])
+    assert stored["workflow_name"] == "signal_ingestion"
 
 
 def test_signal_graph_isolates_expected_fetch_failures(tmp_path: Path) -> None:
