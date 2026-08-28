@@ -159,6 +159,30 @@ class FakeOrchestrator:
         self.calls.append(("run_briefing", kwargs))
         return {"run_id": 8, "status": "completed", "dry_run": True}
 
+    def list_signal_sources(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.calls.append(("signal_sources", kwargs))
+        return [{"id": 41, "name": "Operator feed", "approval_status": "pending", "enabled": False}]
+
+    def get_signal_source_catalog(self) -> list[dict[str, Any]]:
+        self.calls.append(("source_catalog", {}))
+        return [{"name": "Catalog feed", "url": "https://example.com/feed", "approval_status": "pending", "enabled": False}]
+
+    def add_signal_source(self, name: str, url: str, source_type: str, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("add_source", {"name": name, "url": url, "source_type": source_type, **kwargs}))
+        return {"id": 42, "name": name, "url": url, "approval_status": "pending", "enabled": False}
+
+    def approve_signal_source(self, source_id: int, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("approve_source", {"source_id": source_id, **kwargs}))
+        return {"id": source_id, "approval_status": "approved", "enabled": False}
+
+    def reject_signal_source(self, source_id: int, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("reject_source", {"source_id": source_id, **kwargs}))
+        return {"id": source_id, "approval_status": "rejected", "enabled": False}
+
+    def set_signal_source_enabled(self, source_id: int, enabled: bool, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("enable_source", {"source_id": source_id, "enabled": enabled, **kwargs}))
+        return {"id": source_id, "approval_status": "approved", "enabled": enabled}
+
 
 def _client(
     orchestrator: FakeOrchestrator | None = None,
@@ -749,4 +773,33 @@ def test_manual_web_briefing_is_forced_to_dry_run() -> None:
         ("briefing_status", {"database": "test.db"}),
         ("briefing_runs", {"database": "test.db", "limit": 6}),
         ("run_briefing", {"database": "test.db", "run_type": "manual_web", "dry_run": True}),
+    ]
+
+
+def test_source_catalog_add_approval_and_enable_are_separate_actions() -> None:
+    orchestrator = FakeOrchestrator()
+    client = _client(orchestrator)
+
+    catalog = client.get("/api/v1/signal-sources/catalog", headers=_headers())
+    added = client.post(
+        "/api/v1/signal-sources",
+        headers=_headers(),
+        json={"name": "Catalog feed", "url": "https://example.com/feed", "source_type": "rss"},
+    )
+    approved = client.post("/api/v1/signal-sources/42/approve", headers=_headers())
+    enabled = client.post(
+        "/api/v1/signal-sources/42/enabled",
+        headers=_headers(),
+        json={"enabled": True},
+    )
+
+    assert catalog.json()["data"][0]["enabled"] is False
+    assert added.json()["data"]["approval_status"] == "pending"
+    assert approved.json()["data"]["enabled"] is False
+    assert enabled.json()["data"]["enabled"] is True
+    assert orchestrator.calls == [
+        ("source_catalog", {}),
+        ("add_source", {"name": "Catalog feed", "url": "https://example.com/feed", "source_type": "rss", "database": "test.db"}),
+        ("approve_source", {"source_id": 42, "database": "test.db"}),
+        ("enable_source", {"source_id": 42, "enabled": True, "database": "test.db"}),
     ]

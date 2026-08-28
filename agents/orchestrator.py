@@ -935,7 +935,7 @@ class NetworkOrchestrator:
         *,
         database: sqlite3.Connection | DatabaseRef,
     ) -> list[dict[str, Any]]:
-        """Return public source configuration for Telegram display."""
+        """Return public source configuration for authenticated display."""
         try:
             return [
                 source.model_dump()
@@ -943,6 +943,25 @@ class NetworkOrchestrator:
             ]
         except Exception as exc:
             _raise_with_context("list_signal_sources", {}, exc)
+
+    def get_signal_source_catalog(self) -> list[dict[str, Any]]:
+        """Return disabled, pending-review source suggestions from local config."""
+        try:
+            path = Path(__file__).resolve().parents[1] / "config" / "signal_sources.json"
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            sources = payload.get("sources", [])
+            if not isinstance(sources, list):
+                raise ValueError("Signal source catalog must contain a sources list.")
+            result: list[dict[str, Any]] = []
+            for source in sources:
+                if not isinstance(source, dict):
+                    raise ValueError("Signal source catalog entries must be objects.")
+                if source.get("approval_status") != "pending" or source.get("enabled") is not False:
+                    raise ValueError("Catalog suggestions must remain pending and disabled.")
+                result.append(dict(source))
+            return result
+        except Exception as exc:
+            _raise_with_context("get_signal_source_catalog", {}, exc)
 
     def get_signal_source(
         self,

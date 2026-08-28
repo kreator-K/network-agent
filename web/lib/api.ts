@@ -113,6 +113,23 @@ export type BriefingRun = {
   packages_prepared_count?: number;
   followups_due_count?: number;
 };
+export type SignalSource = {
+  id: number;
+  name: string;
+  source_type: string;
+  url: string;
+  approval_status: string;
+  enabled: boolean;
+  last_fetch_status?: string | null;
+};
+export type SignalSourceCatalogItem = {
+  name: string;
+  source_type: "rss" | "atom" | "auto_feed";
+  url: string;
+  approval_status: "pending";
+  enabled: false;
+  topics?: string[];
+};
 
 type ApiEnvelope<T> = { data: T };
 
@@ -331,6 +348,40 @@ export async function runDryBriefing(): Promise<boolean> {
   const result = await apiRequest<unknown>("/api/v1/briefings/run-dry", {
     method: "POST",
     body: JSON.stringify({}),
+  }, null);
+  return result !== null;
+}
+
+export async function getSignalSources(): Promise<SignalSource[]> {
+  return apiRequest<SignalSource[]>("/api/v1/signal-sources", { method: "GET" }, []);
+}
+
+export async function getSignalSourceCatalog(): Promise<SignalSourceCatalogItem[]> {
+  return apiRequest<SignalSourceCatalogItem[]>("/api/v1/signal-sources/catalog", { method: "GET" }, []);
+}
+
+export async function addSignalSource(input: { name: string; url: string; source_type: string }): Promise<boolean> {
+  const result = await apiRequest<unknown>("/api/v1/signal-sources", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }, null);
+  return result !== null;
+}
+
+export async function approveSignalSource(sourceId: number): Promise<boolean> {
+  const result = await apiRequest<unknown>(`/api/v1/signal-sources/${sourceId}/approve`, { method: "POST", body: JSON.stringify({}) }, null);
+  return result !== null;
+}
+
+export async function rejectSignalSource(sourceId: number): Promise<boolean> {
+  const result = await apiRequest<unknown>(`/api/v1/signal-sources/${sourceId}/reject`, { method: "POST", body: JSON.stringify({}) }, null);
+  return result !== null;
+}
+
+export async function setSignalSourceEnabled(sourceId: number, enabled: boolean): Promise<boolean> {
+  const result = await apiRequest<unknown>(`/api/v1/signal-sources/${sourceId}/enabled`, {
+    method: "POST",
+    body: JSON.stringify({ enabled }),
   }, null);
   return result !== null;
 }

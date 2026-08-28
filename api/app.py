@@ -135,6 +135,16 @@ class ContentFeedbackRequest(ApiModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
+class SignalSourceCreateRequest(ApiModel):
+    name: str = Field(min_length=1, max_length=200)
+    url: str = Field(min_length=1, max_length=2000)
+    source_type: Literal["rss", "atom", "auto_feed"] = "auto_feed"
+
+
+class SignalSourceEnabledRequest(ApiModel):
+    enabled: bool
+
+
 def create_app(
     *,
     orchestrator: NetworkOrchestrator | None = None,
@@ -152,6 +162,11 @@ def create_app(
             Route("/api/v1/signals", _signals, methods=["GET"]),
             Route("/api/v1/signals/scan", _scan_signals, methods=["POST"]),
             Route("/api/v1/signals/{signal_id:int}/feedback", _signal_feedback, methods=["POST"]),
+            Route("/api/v1/signal-sources", _signal_sources, methods=["GET", "POST"]),
+            Route("/api/v1/signal-sources/catalog", _signal_source_catalog, methods=["GET"]),
+            Route("/api/v1/signal-sources/{source_id:int}/approve", _approve_signal_source, methods=["POST"]),
+            Route("/api/v1/signal-sources/{source_id:int}/reject", _reject_signal_source, methods=["POST"]),
+            Route("/api/v1/signal-sources/{source_id:int}/enabled", _enable_signal_source, methods=["POST"]),
             Route("/api/v1/opportunities", _opportunities, methods=["GET"]),
             Route("/api/v1/opportunities/{opportunity_id:int}/feedback", _opportunity_feedback, methods=["POST"]),
             Route(
@@ -293,6 +308,82 @@ def _record_signal_feedback(request: Request, feedback: ContentFeedbackRequest) 
         source="web_api",
     )
     return {"status": "recorded"}
+
+
+async def _signal_sources(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    if request.method == "GET":
+        return _delegate(
+            request,
+            lambda: _orchestrator(request).list_signal_sources(database=_database(request)),
+        )
+    parsed = await _parse_body(request, SignalSourceCreateRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    source = cast(SignalSourceCreateRequest, parsed)
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).add_signal_source(
+            source.name,
+            source.url,
+            source.source_type,
+            database=_database(request),
+        ),
+        status_code=201,
+    )
+
+
+async def _signal_source_catalog(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(request, lambda: _orchestrator(request).get_signal_source_catalog())
+
+
+async def _approve_signal_source(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).approve_signal_source(
+            int(request.path_params["source_id"]),
+            database=_database(request),
+        ),
+    )
+
+
+async def _reject_signal_source(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).reject_signal_source(
+            int(request.path_params["source_id"]),
+            database=_database(request),
+        ),
+    )
+
+
+async def _enable_signal_source(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    parsed = await _parse_body(request, SignalSourceEnabledRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    enabled = cast(SignalSourceEnabledRequest, parsed)
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).set_signal_source_enabled(
+            int(request.path_params["source_id"]),
+            enabled.enabled,
+            database=_database(request),
+        ),
+    )
 
 
 async def _opportunities(request: Request) -> JSONResponse:
