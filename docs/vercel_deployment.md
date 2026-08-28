@@ -64,3 +64,10 @@ NETWORK_AGENT_DOTENV_OVERRIDE=false LINKEDIN_PUBLISH_MODE=disabled LINKEDIN_REAL
 ```
 
 Automated tests and deployment checks never perform a LinkedIn provider write.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs the Python 3.11 test/type/lint/release gates and
+the Next.js typecheck/build/audit gates on every push and pull request. CI uses
+placeholder credentials, disabled LinkedIn publishing, and no provider-write
+permissions.

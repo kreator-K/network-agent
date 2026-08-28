@@ -1,0 +1,70 @@
+name: Network Growth Agent CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install backend dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+      - name: Test, typecheck, and lint
+        env:
+          MOCK_MODE: "true"
+          NVIDIA_API_KEY: ci-placeholder
+          LINKEDIN_CLIENT_ID: ci-client
+          LINKEDIN_CLIENT_SECRET: ci-secret
+          LINKEDIN_TOKEN_ENCRYPTION_KEY: ci-encryption-key
+          LINKEDIN_REDIRECT_URI: https://app.example.com/linkedin/callback
+          LINKEDIN_PUBLISH_MODE: disabled
+          LINKEDIN_REAL_PUBLISH_ENABLED: "false"
+          WEB_API_TOKEN: ci-web-api-token-012345678901234567890123
+          NETWORK_AGENT_DOTENV_OVERRIDE: "false"
+        run: |
+          python -m pytest
+          python -m mypy .
+          python -m ruff check .
+      - name: Release safety gate
+        env:
+          MOCK_MODE: "true"
+          NVIDIA_API_KEY: ci-placeholder
+          LINKEDIN_CLIENT_ID: ci-client
+          LINKEDIN_CLIENT_SECRET: ci-secret
+          LINKEDIN_TOKEN_ENCRYPTION_KEY: ci-encryption-key
+          LINKEDIN_REDIRECT_URI: https://app.example.com/linkedin/callback
+          LINKEDIN_PUBLISH_MODE: disabled
+          LINKEDIN_REAL_PUBLISH_ENABLED: "false"
+          WEB_API_TOKEN: ci-web-api-token-012345678901234567890123
+          NETWORK_AGENT_DOTENV_OVERRIDE: "false"
+        run: python scripts/release_check.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Dependency audit
+        run: npm audit --omit=dev
