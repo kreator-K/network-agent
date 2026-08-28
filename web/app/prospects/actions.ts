@@ -1,13 +1,24 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { addProspect, draftFollowup, draftOutreach } from "@/lib/api";
+import { addProspect, confirmMeeting, draftFollowup, draftOutreach, previewMeeting } from "@/lib/api";
 import { requireSession } from "@/lib/session";
 
 export type DraftState = {
   draftText: string;
   error: string;
   interactionId?: number;
+};
+export type MeetingState = {
+  preview?: {
+    meetingDate: string;
+    startTime: string;
+    endTime: string;
+    timezone: string;
+    notes: string;
+  };
+  message: string;
+  error: string;
 };
 
 const emptyDraftState: DraftState = { draftText: "", error: "" };
@@ -60,6 +71,45 @@ export async function createFollowupDraft(
     error: "",
     interactionId: result.draft_interaction_id,
   };
+}
+
+export async function meetingAction(
+  _previous: MeetingState,
+  formData: FormData,
+): Promise<MeetingState> {
+  await requireSession();
+  const prospectId = positiveInteger(formData, "prospect_id");
+  if (!prospectId) return { message: "", error: "Invalid prospect." };
+  const input = {
+    meeting_date: textValue(formData, "meeting_date"),
+    start_time: textValue(formData, "start_time"),
+    end_time: textValue(formData, "end_time"),
+    timezone: textValue(formData, "timezone"),
+    notes: textValue(formData, "notes"),
+  };
+  if (String(formData.get("operation") || "") === "preview") {
+    const preview = await previewMeeting(prospectId, input);
+    if (!preview) return { message: "", error: "Meeting details are invalid or could not be previewed." };
+    return {
+      preview: {
+        meetingDate: preview.meeting_date,
+        startTime: preview.start_time,
+        endTime: preview.end_time || "",
+        timezone: preview.timezone,
+        notes: preview.notes || "",
+      },
+      message: "Review these exact details. No calendar action has occurred.",
+      error: "",
+    };
+  }
+  if (
+    String(formData.get("operation") || "") !== "confirm" ||
+    String(formData.get("confirmation") || "") !== "MEETING_CONFIRMED"
+  ) return { message: "", error: "Explicit meeting confirmation is required." };
+  const confirmed = await confirmMeeting(prospectId, input);
+  if (!confirmed) return { message: "", error: "Confirmation failed safely. Check calendar state before retrying." };
+  revalidatePath("/prospects");
+  return { message: "Meeting confirmed and calendar workflow completed.", error: "" };
 }
 
 function textValue(formData: FormData, key: string): string {

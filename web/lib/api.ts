@@ -71,6 +71,16 @@ export type LinkedInAuthorization = {
   scopes: string[];
   message: string;
 };
+export type MeetingPreview = {
+  prospect_id: number;
+  meeting_date: string;
+  start_time: string;
+  end_time: string | null;
+  timezone: string;
+  notes: string | null;
+  calendar_action: false;
+  confirmation_required: true;
+};
 
 type ApiEnvelope<T> = { data: T };
 
@@ -190,6 +200,33 @@ export async function disconnectLinkedIn(): Promise<boolean> {
   const result = await apiRequest<unknown>("/api/v1/linkedin/disconnect", {
     method: "POST",
     body: JSON.stringify({ confirmation: "DISCONNECT_LINKEDIN" }),
+  }, null);
+  return result !== null;
+}
+
+export async function previewMeeting(prospectId: number, input: {
+  meeting_date: string;
+  start_time: string;
+  end_time?: string;
+  timezone?: string;
+  notes?: string;
+}): Promise<MeetingPreview | null> {
+  return apiRequest<MeetingPreview | null>(`/api/v1/prospects/${prospectId}/meeting-preview`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  }, null);
+}
+
+export async function confirmMeeting(prospectId: number, input: {
+  meeting_date: string;
+  start_time: string;
+  end_time?: string;
+  timezone?: string;
+  notes?: string;
+}): Promise<boolean> {
+  const result = await apiRequest<unknown>(`/api/v1/prospects/${prospectId}/meeting-confirmation`, {
+    method: "POST",
+    body: JSON.stringify({ ...input, confirmation: "MEETING_CONFIRMED" }),
   }, null);
   return result !== null;
 }

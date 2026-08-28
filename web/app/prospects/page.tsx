@@ -3,6 +3,7 @@ import { getFollowupsDue, getProspects } from "@/lib/api";
 import { requireSession } from "@/lib/session";
 import { createProspect } from "./actions";
 import { FollowupDraftForm, OutreachDraftForm } from "./draft-form";
+import { MeetingForm } from "./meeting-form";
 
 export default async function ProspectsPage() {
   await requireSession();
@@ -44,6 +45,7 @@ export default async function ProspectsPage() {
         <div className="prospectActions">
           <OutreachDraftForm prospectId={prospect.id} />
           {dueIds.has(prospect.id) ? <FollowupDraftForm prospectId={prospect.id} /> : null}
+          <MeetingForm prospectId={prospect.id} />
         </div>
       </article>) : <div className="empty"><strong>No prospects yet.</strong><p>Add the first prospect using manually supplied details.</p></div>}</div>
     </section>

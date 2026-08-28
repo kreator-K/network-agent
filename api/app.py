@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic_core import to_jsonable_python
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -59,6 +60,18 @@ class LinkedInDisconnectRequest(ApiModel):
     confirmation: Literal["DISCONNECT_LINKEDIN"]
 
 
+class MeetingPreviewRequest(ApiModel):
+    meeting_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    start_time: str = Field(pattern=r"^\d{2}:\d{2}$")
+    end_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
+    timezone: str | None = Field(default=None, min_length=1, max_length=100)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class MeetingConfirmationRequest(MeetingPreviewRequest):
+    confirmation: Literal["MEETING_CONFIRMED"]
+
+
 def create_app(
     *,
     orchestrator: NetworkOrchestrator | None = None,
@@ -89,6 +102,8 @@ def create_app(
             Route("/api/v1/prospects/followups-due", _followups_due, methods=["GET"]),
             Route("/api/v1/prospects/{prospect_id:int}/outreach-draft", _outreach_draft, methods=["POST"]),
             Route("/api/v1/prospects/{prospect_id:int}/followup-draft", _followup_draft, methods=["POST"]),
+            Route("/api/v1/prospects/{prospect_id:int}/meeting-preview", _meeting_preview, methods=["POST"]),
+            Route("/api/v1/prospects/{prospect_id:int}/meeting-confirmation", _meeting_confirmation, methods=["POST"]),
             Route("/api/v1/linkedin/status", _linkedin_status, methods=["GET"]),
             Route("/api/v1/linkedin/authorization", _linkedin_authorization, methods=["POST"]),
             Route("/api/v1/linkedin/callback", _linkedin_callback, methods=["GET"]),
@@ -345,6 +360,42 @@ async def _followup_draft(request: Request) -> JSONResponse:
     )
 
 
+async def _meeting_preview(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    parsed = await _parse_body(request, MeetingPreviewRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    preview = cast(MeetingPreviewRequest, parsed)
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).preview_meeting_confirmation(
+            int(request.path_params["prospect_id"]),
+            **preview.model_dump(),
+        ),
+    )
+
+
+async def _meeting_confirmation(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    parsed = await _parse_body(request, MeetingConfirmationRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    confirmation = cast(MeetingConfirmationRequest, parsed)
+    payload = confirmation.model_dump(exclude={"confirmation"})
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).confirm_meeting(
+            int(request.path_params["prospect_id"]),
+            **payload,
+            database=_database(request),
+        ),
+    )
+
+
 async def _linkedin_status(request: Request) -> JSONResponse:
     denied = _authorize(request)
     if denied:
@@ -540,7 +591,7 @@ def _delegate(
 
 
 def _ok(data: Any, *, status_code: int = 200) -> JSONResponse:
-    return JSONResponse({"data": data}, status_code=status_code)
+    return JSONResponse({"data": to_jsonable_python(data)}, status_code=status_code)
 
 
 def _error(

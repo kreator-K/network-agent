@@ -109,6 +109,14 @@ class FakeOrchestrator:
         self.calls.append(("linkedin_disconnect", kwargs))
         return {"status": "revoked", "message": "Nothing was published."}
 
+    def preview_meeting_confirmation(self, prospect_id: int, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("meeting_preview", {"prospect_id": prospect_id, **kwargs}))
+        return {"prospect_id": prospect_id, **kwargs, "calendar_action": False, "confirmation_required": True}
+
+    def confirm_meeting(self, prospect_id: int, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("meeting_confirmation", {"prospect_id": prospect_id, **kwargs}))
+        return {"calendar_synced": True, "calendar_block": {"prospect_id": prospect_id}}
+
 
 def _client(
     orchestrator: FakeOrchestrator | None = None,
@@ -494,3 +502,82 @@ def test_linkedin_disconnect_requires_exact_confirmation_contract() -> None:
     assert valid.status_code == 200
     assert valid.json()["data"]["status"] == "revoked"
     assert orchestrator.calls == [("linkedin_disconnect", {"database": "test.db"})]
+
+
+def test_meeting_preview_never_confirms_or_calls_calendar_workflow() -> None:
+    orchestrator = FakeOrchestrator()
+    response = _client(orchestrator).post(
+        "/api/v1/prospects/11/meeting-preview",
+        headers=_headers(),
+        json={"meeting_date": "2026-09-10", "start_time": "14:30", "timezone": "America/New_York"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["calendar_action"] is False
+    assert orchestrator.calls == [
+        (
+            "meeting_preview",
+            {
+                "prospect_id": 11,
+                "meeting_date": "2026-09-10",
+                "start_time": "14:30",
+                "end_time": None,
+                "timezone": "America/New_York",
+                "notes": None,
+            },
+        )
+    ]
+
+
+def test_meeting_confirmation_rejects_freeform_consent() -> None:
+    orchestrator = FakeOrchestrator()
+    client = _client(orchestrator)
+    payload = {"meeting_date": "2026-09-10", "start_time": "14:30"}
+
+    missing = client.post(
+        "/api/v1/prospects/11/meeting-confirmation",
+        headers=_headers(),
+        json=payload,
+    )
+    freeform = client.post(
+        "/api/v1/prospects/11/meeting-confirmation",
+        headers=_headers(),
+        json={**payload, "confirmation": "sounds good"},
+    )
+
+    assert missing.status_code == 422
+    assert freeform.status_code == 422
+    assert orchestrator.calls == []
+
+
+def test_meeting_confirmation_runs_only_with_exact_confirmation() -> None:
+    orchestrator = FakeOrchestrator()
+    response = _client(orchestrator).post(
+        "/api/v1/prospects/11/meeting-confirmation",
+        headers=_headers(),
+        json={
+            "meeting_date": "2026-09-10",
+            "start_time": "14:30",
+            "end_time": "15:00",
+            "timezone": "America/New_York",
+            "notes": "Confirmed by email",
+            "confirmation": "MEETING_CONFIRMED",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["calendar_synced"] is True
+    assert orchestrator.calls == [
+        (
+            "meeting_confirmation",
+            {
+                "prospect_id": 11,
+                "meeting_date": "2026-09-10",
+                "start_time": "14:30",
+                "end_time": "15:00",
+                "timezone": "America/New_York",
+                "notes": "Confirmed by email",
+                "database": "test.db",
+            },
+        )
+    ]

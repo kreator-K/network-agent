@@ -205,6 +205,33 @@ class CalendarAgent:
             "sync_note": None,
         }
 
+    def preview_meeting_confirmation(
+        self,
+        prospect_id: int,
+        meeting_date: str,
+        start_time: str,
+        end_time: str | None = None,
+        timezone: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, object]:
+        """Validate and echo a meeting preview without persistence or provider access."""
+        if prospect_id < 1:
+            raise CalendarAgentError("prospect_id must be positive.")
+        _validate_date(meeting_date)
+        _validate_time(start_time)
+        if end_time is not None:
+            _validate_time(end_time)
+        return {
+            "prospect_id": prospect_id,
+            "meeting_date": meeting_date,
+            "start_time": start_time,
+            "end_time": end_time,
+            "timezone": timezone or settings.google_calendar_timezone,
+            "notes": notes,
+            "calendar_action": False,
+            "confirmation_required": True,
+        }
+
     def get_upcoming_meetings(
         self,
         tracker: TrackerProtocol | None,

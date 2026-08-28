@@ -737,6 +737,32 @@ class NetworkOrchestrator:
                 exc,
             )
 
+    def preview_meeting_confirmation(
+        self,
+        prospect_id: int,
+        meeting_date: str,
+        start_time: str,
+        end_time: str | None = None,
+        timezone: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, object]:
+        """Validate a meeting preview without database or calendar side effects."""
+        try:
+            return self.calendar_agent.preview_meeting_confirmation(
+                prospect_id=prospect_id,
+                meeting_date=meeting_date,
+                start_time=start_time,
+                end_time=end_time,
+                timezone=timezone,
+                notes=notes,
+            )
+        except Exception as exc:
+            _raise_with_context(
+                "preview_meeting_confirmation",
+                {"prospect_id": prospect_id, "meeting_date": meeting_date},
+                exc,
+            )
+
     async def create_confirmed_meeting_event(
         self,
         *,

@@ -224,6 +224,37 @@ def test_confirm_meeting_rejects_invalid_time_format() -> None:
         )
 
 
+def test_preview_meeting_confirmation_has_no_tracker_or_provider_side_effect() -> None:
+    result = CalendarAgent().preview_meeting_confirmation(
+        prospect_id=7,
+        meeting_date="2026-09-10",
+        start_time="14:30",
+        end_time="15:00",
+        timezone="America/New_York",
+        notes="Confirmed separately.",
+    )
+
+    assert result == {
+        "prospect_id": 7,
+        "meeting_date": "2026-09-10",
+        "start_time": "14:30",
+        "end_time": "15:00",
+        "timezone": "America/New_York",
+        "notes": "Confirmed separately.",
+        "calendar_action": False,
+        "confirmation_required": True,
+    }
+
+
+def test_preview_meeting_confirmation_rejects_invalid_details() -> None:
+    with pytest.raises(InvalidMeetingDateError):
+        CalendarAgent().preview_meeting_confirmation(
+            prospect_id=7,
+            meeting_date="September 10",
+            start_time="14:30",
+        )
+
+
 def test_confirm_meeting_records_via_tracker(
     mocker: pytest_mock.MockerFixture,
 ) -> None:
