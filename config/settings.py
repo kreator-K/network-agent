@@ -111,6 +111,7 @@ class Settings:
         os.getenv("MAX_BACKGROUND_OPERATIONS", "2")
     )
     application_environment: str = os.getenv("APPLICATION_ENVIRONMENT", "development")
+    web_api_token: str = os.getenv("WEB_API_TOKEN", "")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
     callback_host: str = os.getenv("LINKEDIN_CALLBACK_HOST", "127.0.0.1")
     callback_port: int = int(os.getenv("LINKEDIN_CALLBACK_PORT", "8080"))

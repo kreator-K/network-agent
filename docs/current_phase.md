@@ -55,5 +55,7 @@ enabled graph modes. It fetches approved sources concurrently and persists all
 results through one controlled SQLite write node. Content packages now also
 support disabled, shadow, and enabled graph modes with typed research, hook,
 carousel, caption, evidence-verification, and bundle nodes. Both graph modes
-remain disabled by default. The next implementation step is the authenticated
-web API foundation.
+remain disabled by default. The authenticated ASGI web API foundation now
+provides owner-token-protected signal, opportunity, and draft-content routes
+through `NetworkOrchestrator`, plus a public minimal health route. The next
+implementation step is the Vercel frontend shell and typed API client.

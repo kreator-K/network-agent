@@ -165,6 +165,12 @@ def configuration_diagnostics(current: Settings = settings) -> dict[str, Any]:
 def settings_snapshot_for_tests(current: Settings = settings) -> dict[str, Any]:
     """Expose only non-secret settings for deterministic tests and diagnostics."""
     data = asdict(current)
-    for secret in ("nvidia_api_key", "telegram_bot_token", "linkedin_client_secret", "linkedin_token_encryption_key"):
+    for secret in (
+        "nvidia_api_key",
+        "telegram_bot_token",
+        "linkedin_client_secret",
+        "linkedin_token_encryption_key",
+        "web_api_token",
+    ):
         data.pop(secret, None)
     return data
