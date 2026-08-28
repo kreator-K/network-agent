@@ -72,5 +72,6 @@ and node-failure counts.
 Web parity is complete through CRM intake and draft-only outreach, explicit
 meeting confirmation, versioned personal-brand profiles, reviewed public-feed
 catalogs, content revision/variant controls, OAuth, frozen LinkedIn publishing
-previews, dry briefings, feedback, and legacy Telegram retirement. The next
-implementation step is a production database adapter and deployment decision.
+previews, dry briefings, feedback, and legacy Telegram retirement. SQLite is the
+selected MVP database and is covered by the backup/restore and readiness gates.
+The next implementation step is selecting the durable Python API host.
