@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import hmac
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -28,6 +28,19 @@ class SignalScanRequest(ApiModel):
 class ContentPackageRequest(ApiModel):
     image_mode: str = "disabled"
     graph_mode: str | None = None
+
+
+class ProspectCreateRequest(ApiModel):
+    name: str = Field(min_length=1, max_length=200)
+    profile_url: str | None = Field(default=None, max_length=1000)
+    location: str | None = Field(default=None, max_length=200)
+    role_title: str | None = Field(default=None, max_length=300)
+    company: str | None = Field(default=None, max_length=300)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class OutreachDraftRequest(ApiModel):
+    ask_type: Literal["resume_review", "career_guidance", "general_chat"]
 
 
 def create_app(
@@ -53,6 +66,10 @@ def create_app(
                 methods=["POST"],
             ),
             Route("/api/v1/content/{post_id:int}", _content_package, methods=["GET"]),
+            Route("/api/v1/prospects", _prospects, methods=["GET", "POST"]),
+            Route("/api/v1/prospects/followups-due", _followups_due, methods=["GET"]),
+            Route("/api/v1/prospects/{prospect_id:int}/outreach-draft", _outreach_draft, methods=["POST"]),
+            Route("/api/v1/prospects/{prospect_id:int}/followup-draft", _followup_draft, methods=["POST"]),
         ],
     )
     application.state.orchestrator = orchestrator or NetworkOrchestrator()
@@ -186,6 +203,80 @@ async def _content_package(request: Request) -> JSONResponse:
             post_id,
             database=_database(request),
         ),
+    )
+
+
+async def _prospects(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    if request.method == "GET":
+        limit = _bounded_limit(request, default=50)
+        if isinstance(limit, JSONResponse):
+            return limit
+        return _delegate(
+            request,
+            lambda: _orchestrator(request).list_prospects(
+                database=_database(request),
+                limit=limit,
+            ),
+        )
+    parsed = await _parse_body(request, ProspectCreateRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    prospect = cast(ProspectCreateRequest, parsed)
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).add_prospect(
+            **prospect.model_dump(),
+            database=_database(request),
+        ),
+        status_code=201,
+    )
+
+
+async def _followups_due(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).get_followups_due(database=_database(request)),
+    )
+
+
+async def _outreach_draft(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    parsed = await _parse_body(request, OutreachDraftRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    draft = cast(OutreachDraftRequest, parsed)
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).draft_outreach(
+            int(request.path_params["prospect_id"]),
+            draft.ask_type,
+            database=_database(request),
+            source="web_api",
+        ),
+        status_code=201,
+    )
+
+
+async def _followup_draft(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).draft_followup(
+            int(request.path_params["prospect_id"]),
+            database=_database(request),
+            source="web_api",
+        ),
+        status_code=201,
     )
 
 

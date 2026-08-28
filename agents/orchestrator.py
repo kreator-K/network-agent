@@ -505,6 +505,21 @@ class NetworkOrchestrator:
         except Exception as exc:
             _raise_with_context("add_prospect", {"name": name}, exc)
 
+    def list_prospects(
+        self,
+        *,
+        database: DatabaseRef,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Return recent CRM prospects for the authenticated web interface."""
+        try:
+            return [
+                prospect.model_dump()
+                for prospect in self._tracker(database).list_prospects(limit)
+            ]
+        except Exception as exc:
+            _raise_with_context("list_prospects", {"limit": limit}, exc)
+
     def discover_prospect_candidates(self, *, database: sqlite3.Connection | DatabaseRef, limit: int = 20) -> list[dict[str, Any]]:
         """Extract only stored public-source candidates; no external profile fetching."""
         try:
@@ -533,6 +548,7 @@ class NetworkOrchestrator:
         ask_type: str,
         *,
         database: DatabaseRef,
+        source: str = "telegram",
     ) -> dict[str, Any]:
         """Draft and log a LinkedIn connection request for manual sending."""
         try:
@@ -559,13 +575,13 @@ class NetworkOrchestrator:
                         "status": "drafted",
                         "ask_type": ask_type,
                         "draft_text": str(draft.get("draft_text", "")),
-                        "source": "telegram",
+                        "source": source,
                     },
                     sort_keys=True,
                 ),
                 direction="outbound_draft",
                 status="drafted",
-                source="telegram",
+                source=source,
             )
             return {
                 "draft": draft,
@@ -584,6 +600,7 @@ class NetworkOrchestrator:
         prospect_id: int,
         *,
         database: DatabaseRef,
+        source: str = "telegram",
     ) -> dict[str, dict[str, Any]]:
         """Draft and log a LinkedIn follow-up message for manual sending."""
         try:
@@ -601,13 +618,13 @@ class NetworkOrchestrator:
                     {
                         "status": "drafted",
                         "draft_text": str(draft.get("draft_text", "")),
-                        "source": "telegram",
+                        "source": source,
                     },
                     sort_keys=True,
                 ),
                 direction="outbound_draft",
                 status="drafted",
-                source="telegram",
+                source=source,
             )
             return {"draft": draft, "draft_interaction_id": interaction.id}
         except Exception as exc:
@@ -682,7 +699,7 @@ class NetworkOrchestrator:
             )
 
     def get_followups_due(self, *, database: DatabaseRef) -> list[dict[str, Any]]:
-        """Return due follow-ups formatted for Telegram display."""
+        """Return due follow-ups formatted for an authenticated interface."""
         try:
             tracker = self._tracker(database)
             prospects = tracker.get_prospects_due_for_followup()

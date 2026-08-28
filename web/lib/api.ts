@@ -8,6 +8,28 @@ export type Signal = {
 };
 export type Opportunity = { id: number; headline: string; suggested_angle?: string; status: string; total_score?: number };
 export type WorkflowRun = { run_id: string; workflow_name: string; workflow_version: number; status: string; started_at: string; finished_at: string; node_count: number; failed_nodes: number };
+export type Prospect = {
+  id: number;
+  name: string;
+  profile_url: string | null;
+  location: string | null;
+  role_title: string | null;
+  company: string | null;
+  notes: string | null;
+  status: string;
+  last_touch_date: string | null;
+};
+export type FollowupDue = {
+  prospect_id: number;
+  name: string;
+  days_since_last_touch?: number;
+  due_reason?: string;
+};
+export type DraftResult = {
+  draft: { draft_text: string; character_count?: number; ask_type?: string };
+  context_warning?: { message?: string } | null;
+  draft_interaction_id: number;
+};
 
 type ApiEnvelope<T> = { data: T };
 
@@ -30,6 +52,43 @@ export async function getOpportunities(): Promise<Opportunity[]> {
 }
 export async function getWorkflowRuns(): Promise<WorkflowRun[]> {
   return apiRequest<WorkflowRun[]>("/api/v1/workflows?limit=30", { method: "GET" }, []);
+}
+
+export async function getProspects(): Promise<Prospect[]> {
+  return apiRequest<Prospect[]>("/api/v1/prospects?limit=100", { method: "GET" }, []);
+}
+
+export async function getFollowupsDue(): Promise<FollowupDue[]> {
+  return apiRequest<FollowupDue[]>("/api/v1/prospects/followups-due", { method: "GET" }, []);
+}
+
+export async function addProspect(input: {
+  name: string;
+  profile_url?: string;
+  location?: string;
+  role_title?: string;
+  company?: string;
+  notes?: string;
+}): Promise<boolean> {
+  const result = await apiRequest<unknown>("/api/v1/prospects", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }, null);
+  return result !== null;
+}
+
+export async function draftOutreach(prospectId: number, askType: string): Promise<DraftResult | null> {
+  return apiRequest<DraftResult | null>(`/api/v1/prospects/${prospectId}/outreach-draft`, {
+    method: "POST",
+    body: JSON.stringify({ ask_type: askType }),
+  }, null);
+}
+
+export async function draftFollowup(prospectId: number): Promise<DraftResult | null> {
+  return apiRequest<DraftResult | null>(`/api/v1/prospects/${prospectId}/followup-draft`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  }, null);
 }
 
 export async function scanSignals(): Promise<boolean> {

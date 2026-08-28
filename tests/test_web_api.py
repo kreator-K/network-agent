@@ -41,6 +41,26 @@ class FakeOrchestrator:
         self.calls.append(("workflows", kwargs))
         return [{"run_id": "run-123", "status": "completed"}]
 
+    def list_prospects(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.calls.append(("prospects", kwargs))
+        return [{"id": 11, "name": "Ada Lovelace", "status": "not_contacted"}]
+
+    def add_prospect(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("add_prospect", kwargs))
+        return {"status": "added", "prospect": {"id": 12, "name": kwargs["name"]}}
+
+    def get_followups_due(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.calls.append(("followups", kwargs))
+        return [{"prospect_id": 13, "name": "Grace Hopper", "days_since_last_touch": 25}]
+
+    def draft_outreach(self, prospect_id: int, ask_type: str, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("draft_outreach", {"prospect_id": prospect_id, "ask_type": ask_type, **kwargs}))
+        return {"draft": {"draft_text": "Manual-send connection draft"}, "draft_interaction_id": 8}
+
+    def draft_followup(self, prospect_id: int, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("draft_followup", {"prospect_id": prospect_id, **kwargs}))
+        return {"draft": {"draft_text": "Manual-send follow-up draft"}, "draft_interaction_id": 9}
+
 
 def _client(
     orchestrator: FakeOrchestrator | None = None,
@@ -188,3 +208,94 @@ def test_workflow_history_route_returns_compact_receipts() -> None:
     assert orchestrator.calls == [
         ("workflows", {"database": "test.db", "limit": 9})
     ]
+
+
+def test_prospect_intake_and_listing_delegate_through_orchestrator() -> None:
+    orchestrator = FakeOrchestrator()
+    client = _client(orchestrator)
+
+    listed = client.get("/api/v1/prospects?limit=25", headers=_headers())
+    created = client.post(
+        "/api/v1/prospects",
+        headers=_headers(),
+        json={"name": "Katherine Johnson", "company": "NASA"},
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()["data"][0]["name"] == "Ada Lovelace"
+    assert created.status_code == 201
+    assert created.json()["data"]["status"] == "added"
+    assert orchestrator.calls == [
+        ("prospects", {"database": "test.db", "limit": 25}),
+        (
+            "add_prospect",
+            {
+                "name": "Katherine Johnson",
+                "profile_url": None,
+                "location": None,
+                "role_title": None,
+                "company": "NASA",
+                "notes": None,
+                "database": "test.db",
+            },
+        ),
+    ]
+
+
+def test_outreach_endpoints_only_create_manual_send_drafts() -> None:
+    orchestrator = FakeOrchestrator()
+    client = _client(orchestrator)
+
+    connection = client.post(
+        "/api/v1/prospects/11/outreach-draft",
+        headers=_headers(),
+        json={"ask_type": "career_guidance"},
+    )
+    followup = client.post(
+        "/api/v1/prospects/11/followup-draft",
+        headers=_headers(),
+    )
+
+    assert connection.status_code == 201
+    assert connection.json()["data"]["draft"]["draft_text"] == "Manual-send connection draft"
+    assert followup.status_code == 201
+    assert followup.json()["data"]["draft"]["draft_text"] == "Manual-send follow-up draft"
+    assert orchestrator.calls == [
+        (
+            "draft_outreach",
+            {
+                "prospect_id": 11,
+                "ask_type": "career_guidance",
+                "database": "test.db",
+                "source": "web_api",
+            },
+        ),
+        (
+            "draft_followup",
+            {"prospect_id": 11, "database": "test.db", "source": "web_api"},
+        ),
+    ]
+
+
+def test_outreach_rejects_unknown_ask_type_before_delegating() -> None:
+    orchestrator = FakeOrchestrator()
+    response = _client(orchestrator).post(
+        "/api/v1/prospects/11/outreach-draft",
+        headers=_headers(),
+        json={"ask_type": "send_it_for_me"},
+    )
+
+    assert response.status_code == 422
+    assert orchestrator.calls == []
+
+
+def test_followups_due_is_read_only_and_authenticated() -> None:
+    orchestrator = FakeOrchestrator()
+    response = _client(orchestrator).get(
+        "/api/v1/prospects/followups-due",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"][0]["prospect_id"] == 13
+    assert orchestrator.calls == [("followups", {"database": "test.db"})]

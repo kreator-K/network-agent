@@ -88,6 +88,16 @@ class RelationshipTrackerAgent:
             prospect_id = _required_lastrowid(cursor)
             return self._get_prospect(connection, prospect_id)
 
+    def list_prospects(self, limit: int = 50) -> list[Prospect]:
+        """Return recent CRM prospects for authenticated review."""
+        bounded = max(1, min(limit, 100))
+        with connect(self.database_path) as connection:
+            rows = connection.execute(
+                "SELECT * FROM prospects ORDER BY updated_at DESC, id DESC LIMIT ?",
+                (bounded,),
+            ).fetchall()
+            return [_prospect_from_row(row) for row in rows]
+
     def log_interaction(
         self,
         prospect_id: int,
