@@ -108,6 +108,28 @@ class NetworkOrchestrator:
         """Legacy command-shaped entrypoint retained for scaffold handlers."""
         return {"command": command, "payload": payload, "status": "unimplemented"}
 
+    def list_research_resources(self, *, database: sqlite3.Connection | DatabaseRef) -> list[dict[str, Any]]:
+        connection, should_close = _coerce_connection(database)
+        try:
+            return [dict(row) for row in connection.execute("SELECT * FROM research_resources ORDER BY id DESC").fetchall()]
+        finally:
+            if should_close:
+                connection.close()
+
+    def add_research_resource(self, title: str, url: str | None, notes: str | None, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        clean_title = title.strip()
+        if not clean_title:
+            raise ValueError("Resource title is required.")
+        connection, should_close = _coerce_connection(database)
+        try:
+            now = datetime.now(UTC).isoformat()
+            with connection:
+                cursor = connection.execute("INSERT INTO research_resources (title, url, notes, created_at) VALUES (?, ?, ?, ?)", (clean_title, (url or "").strip() or None, (notes or "").strip() or None, now))
+            return dict(connection.execute("SELECT * FROM research_resources WHERE id = ?", (cursor.lastrowid,)).fetchone())
+        finally:
+            if should_close:
+                connection.close()
+
     def get_guided_next_steps(
         self,
         *,

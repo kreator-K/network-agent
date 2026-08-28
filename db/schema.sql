@@ -1,5 +1,13 @@
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS research_resources (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    url TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS prospects (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,

@@ -27,6 +27,12 @@ class SignalScanRequest(ApiModel):
     graph_mode: str | None = None
 
 
+class ResearchResourceRequest(ApiModel):
+    title: str = Field(min_length=1, max_length=200)
+    url: str | None = Field(default=None, max_length=2000)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
 class SignalWorkspaceResetRequest(ApiModel):
     confirmation: Literal["CLEAR_SIGNAL_WORKSPACE"]
 
@@ -165,6 +171,7 @@ def create_app(
             Route("/api/v1/diagnostics", _diagnostics, methods=["GET"]),
             Route("/api/v1/workflows/{run_id:str}", _workflow_run, methods=["GET"]),
             Route("/api/v1/workflows", _workflow_runs, methods=["GET"]),
+            Route("/api/v1/research-resources", _research_resources, methods=["GET", "POST"]),
             Route("/api/v1/content", _content_packages, methods=["GET"]),
             Route("/api/v1/content/{post_id:int}", _content_package, methods=["GET"]),
             Route("/api/v1/content/{post_id:int}/approve", _approve_content_package, methods=["POST"]),
@@ -230,6 +237,19 @@ async def _diagnostics(request: Request) -> JSONResponse:
     if denied:
         return denied
     return _ok(configuration_diagnostics())
+
+
+async def _research_resources(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    if request.method == "GET":
+        return _delegate(request, lambda: _orchestrator(request).list_research_resources(database=_database(request)))
+    parsed = await _parse_body(request, ResearchResourceRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    resource = cast(ResearchResourceRequest, parsed)
+    return _delegate(request, lambda: _orchestrator(request).add_research_resource(resource.title, resource.url, resource.notes, database=_database(request)), status_code=201)
 
 
 async def _signals(request: Request) -> JSONResponse:

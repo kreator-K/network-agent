@@ -130,6 +130,7 @@ export type SignalSourceCatalogItem = {
   enabled: false;
   topics?: string[];
 };
+export type ResearchResource = { id: number; title: string; url: string | null; notes: string | null; created_at: string };
 
 type ApiEnvelope<T> = { data: T };
 
@@ -145,6 +146,13 @@ export async function getSignals(): Promise<Signal[]> {
   if (!response.ok) return [];
   const payload = (await response.json()) as ApiEnvelope<Signal[]>;
   return payload.data;
+}
+
+export async function getResearchResources(): Promise<ResearchResource[]> {
+  return apiRequest<ResearchResource[]>("/api/v1/research-resources", { method: "GET" }, []);
+}
+export async function addResearchResource(input: { title: string; url?: string; notes?: string }): Promise<boolean> {
+  return (await apiRequest<unknown>("/api/v1/research-resources", { method: "POST", body: JSON.stringify(input) }, null)) !== null;
 }
 
 export async function getOpportunities(): Promise<Opportunity[]> {

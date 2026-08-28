@@ -37,6 +37,7 @@ EXPECTED_TABLES = [
     "refinement_loop_runs",
     "refinement_outcomes",
     "refinement_proposals",
+    "research_resources",
     "signal_scoring_config",
     "signal_sources",
     "signals",
