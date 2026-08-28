@@ -69,6 +69,21 @@ class PersonalBrandProfileData(BaseModel):
     preferred_tone: list[str] = Field(default_factory=list, max_length=20)
     preferred_depth: str | None = Field(default=None, max_length=200)
     preferred_post_formats: list[str] = Field(default_factory=list, max_length=20)
+    voice_sentence_rhythm: list[str] = Field(default_factory=list, max_length=20)
+    voice_vocabulary_to_use: list[str] = Field(default_factory=list, max_length=30)
+    voice_vocabulary_to_avoid: list[str] = Field(default_factory=list, max_length=50)
+    voice_formatting_rules: list[str] = Field(default_factory=list, max_length=30)
+    voice_point_of_view: list[str] = Field(default_factory=list, max_length=20)
+    voice_reference_notes: list[str] = Field(default_factory=list, max_length=20)
+    brand_name: str | None = Field(default=None, max_length=200)
+    visual_colors: list[str] = Field(default_factory=list, max_length=20)
+    typography: list[str] = Field(default_factory=list, max_length=20)
+    logo_usage: str | None = Field(default=None, max_length=300)
+    imagery_guidelines: list[str] = Field(default_factory=list, max_length=30)
+    visual_direction: str | None = Field(default=None, max_length=500)
+    content_rules_do: list[str] = Field(default_factory=list, max_length=30)
+    content_rules_avoid: list[str] = Field(default_factory=list, max_length=30)
+    cta_style: str | None = Field(default=None, max_length=300)
     humor_preferences: list[str] = Field(default_factory=list, max_length=20)
     personal_experience_boundaries: list[str] = Field(default_factory=list, max_length=30)
     verified_experiences: list[str] = Field(default_factory=list, max_length=50)
@@ -86,6 +101,11 @@ class PersonalBrandProfileData(BaseModel):
     @field_validator(
         "institutions", "career_focus", "content_pillars", "target_audiences",
         "preferred_tone", "preferred_post_formats", "humor_preferences",
+        "voice_sentence_rhythm", "voice_vocabulary_to_use",
+        "voice_vocabulary_to_avoid", "voice_formatting_rules",
+        "voice_point_of_view", "voice_reference_notes",
+        "visual_colors", "typography", "imagery_guidelines",
+        "content_rules_do", "content_rules_avoid",
         "personal_experience_boundaries", "verified_experiences",
         "allowed_personal_claims", "claims_requiring_confirmation", "topics_to_avoid",
         "posting_preferences", "networking_goals", "desired_network_types",
@@ -388,6 +408,95 @@ class AlternativeHook(BaseModel):
     rationale: str = Field(min_length=1, max_length=500)
 
 
+class ContentPlan(BaseModel):
+    """Frozen editorial selection used to produce a content package."""
+
+    editorial_pillar: str = Field(min_length=1, max_length=100)
+    topical_pillar: str = Field(min_length=1, max_length=200)
+    funnel_position: Literal["TOF", "MOF", "BOF"]
+    hook_archetype: str = Field(min_length=1, max_length=100)
+    hook_idea: str = Field(min_length=1, max_length=500)
+
+
+class PostVariant(BaseModel):
+    """One complete, reviewable post treatment for the same evidence base."""
+
+    label: str = Field(min_length=1, max_length=80)
+    hook_archetype: str = Field(min_length=1, max_length=100)
+    funnel_position: Literal["TOF", "MOF", "BOF"]
+    post_text: str = Field(min_length=1, max_length=6000)
+
+
+class HookAB(BaseModel):
+    """Two alternate opening lines for the selected primary variant."""
+
+    hook_a: str = Field(min_length=1, max_length=400)
+    hook_b: str = Field(min_length=1, max_length=400)
+
+
+class ResearchBrief(BaseModel):
+    """Completed evidence brief consumed by downstream content stages."""
+
+    status: Literal["completed"] = "completed"
+    sources: list[dict[str, Any]] = Field(min_length=1)
+    evidence_points: list[str] = Field(min_length=1, max_length=20)
+    claim_ids: list[str] = Field(min_length=1, max_length=20)
+    gaps: list[str] = Field(default_factory=list, max_length=20)
+
+
+class HookArtifact(BaseModel):
+    """Hook-writer output with traceable claim references."""
+
+    status: Literal["completed"] = "completed"
+    primary: str = Field(min_length=1, max_length=400)
+    alternatives: list[AlternativeHook] = Field(min_length=2, max_length=3)
+    claim_ids: list[str] = Field(min_length=1, max_length=20)
+    selection_rationale: str = Field(min_length=1, max_length=500)
+
+
+class CarouselSlide(BaseModel):
+    """One planned carousel slide and its evidence/asset references."""
+
+    id: str = Field(min_length=1, max_length=80)
+    role: str = Field(min_length=1, max_length=80)
+    headline: str = Field(min_length=1, max_length=300)
+    body: str = Field(default="", max_length=1000)
+    visual_job: str = Field(min_length=1, max_length=500)
+    claim_ids: list[str] = Field(default_factory=list, max_length=20)
+    asset_ids: list[str] = Field(default_factory=list, max_length=20)
+
+
+class RenderedSlide(BaseModel):
+    """Registered raster result for one carousel slide."""
+
+    slide_id: str = Field(min_length=1, max_length=80)
+    file: str = Field(min_length=1, max_length=1000)
+    width: int = 1080
+    height: int = 1350
+    sha256: str = Field(min_length=64, max_length=64)
+
+
+class CarouselArtifact(BaseModel):
+    """Carousel plan and optional rendered slide receipts."""
+
+    status: Literal["planned", "completed"] = "planned"
+    slides: list[CarouselSlide] = Field(min_length=1, max_length=10)
+    rendered_slides: list[RenderedSlide] = Field(default_factory=list, max_length=10)
+
+
+class CaptionArtifact(BaseModel):
+    """Caption-writer output bound to the carousel artifact."""
+
+    status: Literal["draft", "completed"] = "draft"
+    text: str = Field(min_length=1, max_length=3000)
+    claim_ids: list[str] = Field(default_factory=list, max_length=20)
+    source_references: list[dict[str, Any]] = Field(min_length=1)
+    attribution: str | None = Field(default=None, max_length=500)
+    disclosure: str | None = Field(default=None, max_length=500)
+    unresolved_gaps: list[str] = Field(default_factory=list, max_length=20)
+    carousel_sha256: str = Field(min_length=64, max_length=64)
+
+
 class FactualClaim(BaseModel):
     """Traceable factual statement used by a package."""
 
@@ -434,6 +543,15 @@ class ContentPackage(BaseModel):
     opportunity_id: int
     primary_post: str = Field(min_length=1, max_length=6000)
     alternative_hooks: list[AlternativeHook] = Field(min_length=2, max_length=3)
+    content_plan: ContentPlan
+    variants: list[PostVariant] = Field(min_length=3, max_length=3)
+    selected_variant: int = Field(default=1, ge=1, le=3)
+    hook_ab: HookAB
+    flop_adjustment: str = Field(min_length=1, max_length=500)
+    research: ResearchBrief
+    hook: HookArtifact
+    carousel: CarouselArtifact
+    caption: CaptionArtifact
     target_audience: str = Field(min_length=1)
     recommended_format: str = Field(min_length=1)
     content_treatment: str = Field(min_length=1)
@@ -450,6 +568,7 @@ class ContentPackage(BaseModel):
     profile_version: int = Field(ge=1)
     scoring_config_version: int = Field(ge=1)
     package_version: int = Field(ge=1)
+    generation_workflow: dict[str, Any] | None = None
 
 
 class BriefingRun(DataLayerModel):

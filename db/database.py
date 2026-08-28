@@ -359,9 +359,9 @@ def verify_personal_brand_profile_hash(row: sqlite3.Row) -> bool:
         return False
     if profile.schema_version != row["schema_version"]:
         return False
-    return personal_brand_profile_hash(canonical_personal_brand_profile_json(profile)) == row[
-        "profile_hash"
-    ]
+    # Stored versions are immutable. Hash their exact canonical payload so a
+    # later schema addition with optional defaults does not invalidate history.
+    return personal_brand_profile_hash(row["profile_json"]) == row["profile_hash"]
 
 
 def seed_refinement_loop_constraints(connection: sqlite3.Connection) -> None:

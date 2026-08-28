@@ -2,6 +2,7 @@ python-telegram-bot
 python-dotenv
 requests
 pydantic
+Pillow
 pytest
 pytest-mock
 mypy

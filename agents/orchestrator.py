@@ -1450,11 +1450,18 @@ class NetworkOrchestrator:
             method_name="save_content_draft",
         )
 
-    def generate_content_package(self, opportunity_id: int, *, database: sqlite3.Connection | DatabaseRef, image_mode: str = "disabled") -> dict[str, Any]:
+    def generate_content_package(
+        self,
+        opportunity_id: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+        image_mode: str = "disabled",
+        graph_mode: str | None = None,
+    ) -> dict[str, Any]:
         """Prepare a review-only package from a stored opportunity; never publish it."""
         try:
             return self.content_inspiration_agent.generate_package_from_opportunity(
-                opportunity_id, database, image_mode
+                opportunity_id, database, image_mode, graph_mode
             ).model_dump()
         except Exception as exc:
             _raise_with_context("generate_content_package", {"opportunity_id": opportunity_id}, exc)

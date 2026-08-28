@@ -151,6 +151,7 @@ def configuration_diagnostics(current: Settings = settings) -> dict[str, Any]:
             "linkedin_real_write": current.linkedin_real_publish_enabled,
             "public_signal_http": current.public_signal_allow_http,
             "signal_graph": current.signal_graph_mode,
+            "content_graph": current.content_graph_mode,
         },
         "safe_defaults": {
             "linkedin_disabled": current.linkedin_publish_mode == "disabled" and not current.linkedin_real_publish_enabled,

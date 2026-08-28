@@ -140,6 +140,30 @@ def test_personal_brand_profile_validation_trims_strings_and_lists() -> None:
     assert profile.content_pillars == ["AI products", "Product strategy"]
 
 
+def test_voice_dna_fields_are_validated_and_rendered_for_prompts() -> None:
+    agent = ProfileContextAgent()
+    profile = agent.validate_personal_brand_profile(
+        _brand_profile(
+            voice_sentence_rhythm=[" Short opening.  Compact explanation. "],
+            voice_vocabulary_to_avoid=[" game-changer "],
+            voice_formatting_rules=["No hashtags"],
+            voice_point_of_view=["First person only for verified experience"],
+            brand_name="kreator_K",
+            visual_colors=["Primary blue #2D5BFF"],
+            cta_style="Follow for useful trends.",
+        )
+    )
+
+    assert profile.voice_sentence_rhythm == ["Short opening. Compact explanation."]
+    context = agent.build_personal_brand_context(profile)
+    assert "Voice sentence rhythm: Short opening. Compact explanation." in context
+    assert "Voice vocabulary to avoid: game-changer" in context
+    assert "Voice formatting rules: No hashtags" in context
+    assert "Brand name: kreator_K" in context
+    assert "Visual colors: Primary blue #2D5BFF" in context
+    assert "CTA style: Follow for useful trends." in context
+
+
 @pytest.mark.parametrize(
     "overrides",
     [

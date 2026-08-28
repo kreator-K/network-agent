@@ -38,11 +38,15 @@
     "professionals interested in product strategy"
   ],
   "preferred_tone": [
+    "direct",
+    "punchy",
+    "subtly comic",
     "thoughtful",
     "practical",
     "credible",
     "curious",
     "analytical when useful",
+    "understanding",
     "occasionally witty"
   ],
   "preferred_depth": "Useful and specific, with enough analysis to support a clear point without becoming academic.",
@@ -51,6 +55,70 @@
     "short analysis",
     "experience-backed lesson"
   ],
+  "voice_sentence_rhythm": [
+    "Mix short declarative openings with compact explanatory paragraphs.",
+    "Vary sentence length without becoming theatrical.",
+    "End with a direct takeaway rather than an engagement question."
+  ],
+  "voice_vocabulary_to_use": [
+    "practical",
+    "evidence",
+    "tradeoff",
+    "decision",
+    "product judgment"
+  ],
+  "voice_vocabulary_to_avoid": [
+    "game-changer",
+    "revolutionary",
+    "unlock",
+    "skyrocket",
+    "thought leader"
+  ],
+  "voice_formatting_rules": [
+    "Use short paragraphs and plain text.",
+    "Do not use hashtags, markdown headings, semicolons, or em dashes.",
+    "Use no emoji unless explicitly requested."
+  ],
+  "voice_point_of_view": [
+    "Use first person only for verified experience or clearly framed interpretation.",
+    "Prefer grounded observations over universal claims.",
+    "Address the reader directly only when it makes the advice clearer."
+  ],
+  "voice_reference_notes": [
+    "Sound like a direct, punchy product professional, not a generic LinkedIn copywriter.",
+    "Use subtle comic or satirical observations without becoming rude, robotic, or condescending.",
+    "Favor useful distinctions and concrete next steps over motivational commentary.",
+    "Example energy: The AI PM job req wants 5 years of experience with a tool that shipped 8 months ago."
+  ],
+  "brand_name": "kreator_K",
+  "visual_colors": [
+    "Primary blue #2D5BFF",
+    "Near-black navy background #0A0E17",
+    "Off-white text #F5F3EF",
+    "Orange accent #FF7A1A"
+  ],
+  "typography": [
+    "Headlines: Space Grotesk Bold, fallback Arial Black",
+    "Body: Inter, fallback -apple-system, Helvetica, Arial",
+    "Labels and numbers: Space Mono, fallback Courier New"
+  ],
+  "logo_usage": "Text-only kreator_K wordmark in Space Grotesk Bold. Do not add a separate logo mark.",
+  "imagery_guidelines": [
+    "Mix bold typography slides with clean screenshots, tools, job posts, and trend data.",
+    "Use consistently cropped and framed screenshots with minimal shadow and high contrast.",
+    "Avoid cluttered screenshots, generic stock photography, and stiff corporate imagery."
+  ],
+  "visual_direction": "Raw and unpolished. Read like a live, in-the-know build log rather than a polished corporate deck.",
+  "content_rules_do": [
+    "Back every trend or news claim with a real, checkable source.",
+    "Keep content actionable for people job-hunting or skilling up into PM, AI PM, or AI engineering roles."
+  ],
+  "content_rules_avoid": [
+    "Hype without substance.",
+    "Generic motivational or hustle-culture fluff.",
+    "Rude, robotic, condescending, or unsupported commentary."
+  ],
+  "cta_style": "Simple and direct: Follow for the AI PM trends that actually matter.",
   "humor_preferences": [
     "Occasional light humor about PM, MBA, technology, and workplace culture.",
     "Avoid humor that weakens credibility or targets individuals."

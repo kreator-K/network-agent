@@ -1,9 +1,10 @@
 """Tests for read-only cross-table integrity checks."""
 
+import json
 from pathlib import Path
 
 from agents.system_integrity_agent import SystemIntegrityAgent
-from db.database import connect, initialize_database
+from db.database import connect, initialize_database, personal_brand_profile_hash
 
 
 FUTURE_DATE = "2099-01-01"
@@ -567,6 +568,36 @@ def test_check_personal_brand_profile_flags_hash_mismatch(tmp_path: Path) -> Non
 
     assert result["passed"] is False
     assert result["violations"][0]["type"] == "profile_hash_mismatch"
+
+
+def test_profile_integrity_accepts_immutable_record_from_older_optional_schema(
+    tmp_path: Path,
+) -> None:
+    database_path = _database_path(tmp_path)
+    voice_fields = {
+        "voice_sentence_rhythm",
+        "voice_vocabulary_to_use",
+        "voice_vocabulary_to_avoid",
+        "voice_formatting_rules",
+        "voice_point_of_view",
+        "voice_reference_notes",
+    }
+    with connect(database_path) as connection:
+        row = connection.execute(
+            "SELECT id, profile_json FROM personal_brand_profile WHERE is_active = 1"
+        ).fetchone()
+        legacy = json.loads(row["profile_json"])
+        for field in voice_fields:
+            legacy.pop(field, None)
+        legacy_json = json.dumps(legacy, sort_keys=True, separators=(",", ":"))
+        connection.execute(
+            "UPDATE personal_brand_profile SET profile_json = ?, profile_hash = ? WHERE id = ?",
+            (legacy_json, personal_brand_profile_hash(legacy_json), row["id"]),
+        )
+
+    result = SystemIntegrityAgent().check_personal_brand_profile(database_path)
+
+    assert result["passed"] is True
 
 
 def test_run_full_integrity_check_aggregates_all_eleven_checks(tmp_path: Path) -> None:

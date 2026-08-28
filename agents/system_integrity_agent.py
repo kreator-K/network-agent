@@ -428,13 +428,10 @@ class SystemIntegrityAgent:
                 validated = PersonalBrandProfileData.model_validate(parsed)
                 if validated.schema_version != row["schema_version"]:
                     raise ValueError
-                expected_hash = personal_brand_profile_hash(
-                    json.dumps(
-                        validated.model_dump(mode="json"),
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                )
+                # Hash the immutable stored payload. Re-serializing the record
+                # through a newer model would inject newly added default fields
+                # and falsely invalidate older, otherwise valid versions.
+                expected_hash = personal_brand_profile_hash(row["profile_json"])
                 if expected_hash != row["profile_hash"]:
                     violations.append(
                         {

@@ -81,3 +81,22 @@ the engine caps concurrency at 16 workers.
 
 Dynamic graphs will remain proposal-only until authorization, node-count, cost,
 depth, and approval-boundary validation exists.
+
+## Content Artifact Graph
+
+`CONTENT_GRAPH_MODE` uses the same `disabled`, `shadow`, and `enabled` rollout
+states. Shadow mode records topology metadata without duplicating model calls.
+Enabled mode executes six typed nodes:
+
+1. `research`
+2. `hook`
+3. `carousel`
+4. `caption`
+5. `verify_evidence`
+6. `bundle`
+
+The evidence verifier runs independently after research while the writing path
+continues. It rejects claim/source mismatches before persistence. If optional
+carousel rendering fails, the graph falls back to the validated slide plan and
+continues caption generation. The package remains a draft and stores the graph
+run receipt for the future web UI.

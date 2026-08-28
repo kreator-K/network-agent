@@ -107,8 +107,9 @@ def test_generate_image_used_when_no_user_image_provided(
     assert result["image_source"] == "generated"
     assert result["image_path"] == "mock://image.png"
     image_generate.assert_called_once_with(
-        prompt="LinkedIn post image for: AI PM transitions",
+        prompt="AI PM transitions",
         mock_mode=content_module.settings.mock_mode,
+        aspect_ratio=content_module.settings.default_content_image_aspect_ratio,
     )
 
 

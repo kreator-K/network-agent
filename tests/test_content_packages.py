@@ -1,5 +1,6 @@
 """Focused Phase 8D package lifecycle tests."""
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -41,7 +42,24 @@ class NarrativeModel(FakeModel):
             }
         )
         if task_type == "content_package_generation":
-            result = {"primary_post": "unused package model result"}
+            primary = "Most roadmap reviews skip the one question that matters: what would make us stop."
+            result = {
+                "primary_post": primary,
+                "alternative_hooks": [
+                    {"text": "The demo worked. That is not the same as ready.", "rationale": "Leads with the gap between capability and trust."},
+                    {"text": "Nobody asked what evidence would change the call.", "rationale": "Names the missing step directly."},
+                ],
+                "variants": [
+                    {"label": "Variant 1", "hook_archetype": "Evidence gap", "funnel_position": "MOF", "post_text": primary},
+                    {"label": "Variant 2", "hook_archetype": "Practical distinction", "funnel_position": "MOF", "post_text": "A roadmap is a decision record, not a feature queue.\n\nThe source makes the evidence gap visible."},
+                    {"label": "Variant 3", "hook_archetype": "Decision consequence", "funnel_position": "MOF", "post_text": "The expensive mistake is scaling before the evidence supports it.\n\nThe source gives teams a useful checkpoint."},
+                ],
+                "hook_ab": {
+                    "hook_a": "The demo worked. That is not the same as ready.",
+                    "hook_b": "Nobody asked what evidence would change the call.",
+                },
+                "flop_adjustment": "Shorten the setup and lead with the source-backed decision consequence.",
+            }
         else:
             result = {
                 "primary_post": (
@@ -82,8 +100,66 @@ def test_selected_opportunity_creates_source_traced_package(tmp_path: Path) -> N
     assert post.source_references_json
     assert post.profile_version == 1
     assert post.scoring_config_version == 1
-    assert "A practical review starts with three questions" in post.draft_text
+    assert "A practical review starts with three checks" in post.draft_text
     assert "My takeaway: Analyze" not in post.draft_text
+    package = json.loads(post.package_json or "{}")
+    assert len(package["variants"]) == 3
+    assert package["selected_variant"] == 1
+    assert package["variants"][0]["post_text"] == post.draft_text
+    assert package["content_plan"]["funnel_position"] in {"TOF", "MOF", "BOF"}
+    assert package["hook_ab"]["hook_a"]
+    assert package["flop_adjustment"]
+
+
+def test_valid_model_output_replaces_deterministic_template_and_hooks(tmp_path: Path) -> None:
+    database, opportunity_id = _opportunity(tmp_path)
+    model = NarrativeModel()
+    post = ContentInspirationAgent(model).generate_package_from_opportunity(opportunity_id, database)
+    assert post.draft_text == "Most roadmap reviews skip the one question that matters: what would make us stop."
+    assert "A practical review starts with three checks" not in post.draft_text
+    package = json.loads(post.package_json or "{}")
+    hook_texts = [hook["text"] for hook in package["alternative_hooks"]]
+    assert "The demo worked. That is not the same as ready." in hook_texts
+    assert package["variants"][1]["post_text"].startswith("A roadmap is a decision record")
+    assert package["hook_ab"]["hook_b"] == "Nobody asked what evidence would change the call."
+    assert package["flop_adjustment"].startswith("Shorten the setup")
+    package_call = next(call for call in model.calls if call["task_type"] == "content_package_generation")
+    assert "Do not default to a fixed listicle formula" in package_call["prompt"]
+    assert "AI product strategy for product managers at Cornell Tech" in package_call["prompt"]
+    assert "Voice DNA" in package_call["prompt"]
+    assert "variants: exactly 3 objects" in package_call["prompt"]
+    assert "Primary blue #2D5BFF" in package_call["prompt"]
+    assert "Simple and direct" in package_call["prompt"]
+
+
+def test_selecting_variant_versions_package_and_resets_approval(tmp_path: Path) -> None:
+    database, opportunity_id = _opportunity(tmp_path)
+    agent = ContentInspirationAgent(NarrativeModel())
+    original = agent.generate_package_from_opportunity(opportunity_id, database)
+    with connect(database) as connection:
+        connection.execute(
+            "UPDATE content_posts SET status = 'approved_for_later_posting', approved_at = ? WHERE id = ?",
+            (datetime.now(UTC).isoformat(), original.id),
+        )
+        connection.commit()
+
+    selected = agent.select_variant(original.id or 0, 2, database)
+
+    package = json.loads(selected.package_json or "{}")
+    assert selected.package_version == 2
+    assert selected.status == "draft"
+    assert selected.approved_at is None
+    assert package["selected_variant"] == 2
+    assert selected.draft_text == package["variants"][1]["post_text"]
+    with connect(database) as connection:
+        versions = connection.execute(
+            "SELECT package_version, revision_type FROM content_post_versions WHERE content_post_id = ? ORDER BY package_version",
+            (original.id,),
+        ).fetchall()
+    assert [(row["package_version"], row["revision_type"]) for row in versions] == [
+        (1, "initial_package"),
+        (2, "select_variant"),
+    ]
 
 
 def test_mock_image_package_has_alt_text(tmp_path: Path) -> None:
@@ -129,7 +205,7 @@ def test_revision_rewrites_whole_post_and_preserves_distinct_versions(
     assert revised.package_version == 2
     assert revised.draft_text != original.draft_text
     assert original.draft_text not in revised.draft_text
-    assert "I keep coming back" in revised.draft_text
+    assert "I keep returning" in revised.draft_text
     with connect(database) as connection:
         versions = connection.execute(
             """

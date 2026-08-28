@@ -103,6 +103,7 @@ class Settings:
     )
     signal_graph_mode: str = os.getenv("SIGNAL_GRAPH_MODE", "disabled")
     signal_graph_max_workers: int = int(os.getenv("SIGNAL_GRAPH_MAX_WORKERS", "4"))
+    content_graph_mode: str = os.getenv("CONTENT_GRAPH_MODE", "disabled")
     background_operation_timeout_seconds: int = int(
         os.getenv("BACKGROUND_OPERATION_TIMEOUT_SECONDS", "120")
     )

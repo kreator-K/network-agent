@@ -1868,10 +1868,54 @@ def _format_content_opportunity(item: dict[str, Any], detailed: bool = False) ->
 def _format_content_package(post: dict[str, Any]) -> str:
     hooks = _json_list(post.get("alternative_hooks_json"))
     claims = _json_list(post.get("factual_claims_json"))
+    try:
+        package = json.loads(post.get("package_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        package = {}
+    plan = package.get("content_plan") if isinstance(package, dict) else None
+    hook_ab = package.get("hook_ab") if isinstance(package, dict) else None
+    variants = package.get("variants") if isinstance(package, dict) else None
+    carousel = package.get("carousel") if isinstance(package, dict) else None
+    caption = package.get("caption") if isinstance(package, dict) else None
+    selected_variant = package.get("selected_variant", 1) if isinstance(package, dict) else 1
+    variant_lines: list[str] = []
+    if isinstance(variants, list):
+        for index, variant in enumerate(variants, start=1):
+            if not isinstance(variant, dict):
+                continue
+            marker = "selected" if index == selected_variant else "available"
+            preview = " ".join(str(variant.get("post_text") or "").split())[:180]
+            variant_lines.append(
+                f"V{index} [{variant.get('hook_archetype') or '-'} | {marker}]: {preview}"
+            )
     return "\n".join([
         f"Content package #{post.get('id')} | {post.get('status')} | v{post.get('package_version')}",
+        (
+            f"Plan: {plan.get('editorial_pillar')} | {plan.get('topical_pillar')} | "
+            f"{plan.get('funnel_position')}"
+            if isinstance(plan, dict)
+            else "Plan: legacy package"
+        ),
         post.get("draft_text") or "",
+        *(variant_lines or ["Variants: legacy package"]),
         "Alternative hooks: " + "; ".join(str(hook.get("text", "")) for hook in hooks),
+        (
+            f"Hook A/B: {hook_ab.get('hook_a')} | {hook_ab.get('hook_b')}"
+            if isinstance(hook_ab, dict)
+            else "Hook A/B: unavailable"
+        ),
+        (
+            f"Carousel: {len(carousel.get('slides', []))} slides | "
+            f"rendered: {len(carousel.get('rendered_slides', []))}"
+            if isinstance(carousel, dict)
+            else "Carousel: unavailable"
+        ),
+        (
+            f"Caption: {str(caption.get('text') or '').strip()[:240]}"
+            if isinstance(caption, dict)
+            else "Caption: unavailable"
+        ),
+        f"If it flops: {package.get('flop_adjustment') or '-'}" if isinstance(package, dict) else "",
         f"Unresolved claims: {sum(bool(item.get('confirmation_required')) for item in claims if isinstance(item, dict))}",
         f"Image: {post.get('image_source')} | Alt text: {post.get('image_alt_text') or '-'}",
         "Nothing has been published.",
@@ -1915,6 +1959,7 @@ def _format_publish_request(result: dict[str, Any]) -> str:
 
 def _package_markup(post_id: Any) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("Use Variant 1", callback_data=f"package_variant_1:{post_id}"), InlineKeyboardButton("Use Variant 2", callback_data=f"package_variant_2:{post_id}"), InlineKeyboardButton("Use Variant 3", callback_data=f"package_variant_3:{post_id}")],
         [InlineKeyboardButton("Save Draft", callback_data=f"package_save:{post_id}"), InlineKeyboardButton("Approve for Later Posting", callback_data=f"package_approve:{post_id}"), InlineKeyboardButton("Reject", callback_data=f"package_reject:{post_id}")],
         [InlineKeyboardButton("View Sources", callback_data=f"package_sources:{post_id}"), InlineKeyboardButton("View Claims", callback_data=f"package_claims:{post_id}"), InlineKeyboardButton("Make More Personal", callback_data=f"package_personal:{post_id}")],
         [InlineKeyboardButton("Make More Analytical", callback_data=f"package_analytical:{post_id}"), InlineKeyboardButton("Make More Concise", callback_data=f"package_concise:{post_id}"), InlineKeyboardButton("Make Funnier", callback_data=f"package_funny:{post_id}")],
@@ -1941,6 +1986,15 @@ async def _handle_package_callback(query: Any, context: Any, data: str) -> None:
         elif action == "package_reject":
             orchestrator.reject_content_package(post_id=post_id, database=_database(context))
             message = "Content package rejected. Nothing has been published."
+        elif action in {"package_variant_1", "package_variant_2", "package_variant_3"}:
+            variant_number = int(action[-1])
+            post = orchestrator.select_content_variant(
+                post_id=post_id,
+                variant_number=variant_number,
+                database=_database(context),
+            )
+            await query.edit_message_text(_format_content_package(post))
+            return
         elif action in {"package_personal", "package_analytical", "package_concise", "package_funny"}:
             revision = {"package_personal": "make_more_personal", "package_analytical": "make_more_analytical", "package_concise": "make_more_concise", "package_funny": "make_funnier"}[action]
             post = orchestrator.revise_content_package(

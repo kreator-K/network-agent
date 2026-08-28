@@ -19,6 +19,11 @@
       "rule_key": "tone_floor",
       "rule_value": "professional, concise, and non-pushy",
       "description": "Generated text should stay professional, concise, and non-pushy."
+    },
+    {
+      "rule_key": "writing_style",
+      "rule_value": "spartan, specific, mildly uncertain, practical, varied sentence rhythm, first-person only when grounded in supplied facts; no buzzwords, cliches, generic commentary, fluff, rhetorical questions, hashtags, markdown, em dashes, or semicolons",
+      "description": "Content writing should use plain, useful language with grounded first-person perspective and varied pacing."
     }
   ]
 }
