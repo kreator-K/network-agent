@@ -7,7 +7,6 @@ services:
     dockerContext: .
     healthCheckPath: /readyz
     numInstances: 1
-    maxShutdownDelaySeconds: 30
     disk:
       name: network-agent-data
       mountPath: /data

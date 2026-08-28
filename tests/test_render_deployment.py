@@ -16,6 +16,7 @@ def test_render_blueprint_uses_one_instance_and_one_persistent_disk() -> None:
     assert "runtime: docker" in blueprint
     assert "numInstances: 1" in blueprint
     assert "mountPath: /data" in blueprint
+    assert "maxShutdownDelaySeconds" not in blueprint
     assert "DATABASE_PATH" in blueprint
     assert "value: /data/network_agent.db" in blueprint
     assert "healthCheckPath: /readyz" in blueprint
