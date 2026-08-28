@@ -99,4 +99,4 @@ The evidence verifier runs independently after research while the writing path
 continues. It rejects claim/source mismatches before persistence. If optional
 carousel rendering fails, the graph falls back to the validated slide plan and
 continues caption generation. The package remains a draft and stores the graph
-run receipt for the future web UI.
+run receipt for the authenticated web UI/API.
