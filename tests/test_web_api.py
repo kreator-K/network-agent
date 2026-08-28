@@ -188,11 +188,12 @@ def _client(
     orchestrator: FakeOrchestrator | None = None,
     *,
     token: str = "owner-secret",
+    database: str = "test.db",
 ) -> TestClient:
     return TestClient(
         create_app(
             orchestrator=orchestrator,  # type: ignore[arg-type]
-            database="test.db",
+            database=database,
             api_token=token,
         )
     )
@@ -218,6 +219,15 @@ def test_readiness_endpoint_fails_closed_without_healthy_production_config() -> 
     assert response.status_code == 503
     assert response.json()["status"] == "not_ready"
     assert response.json()["checks"]["api_auth_configured"] is False
+
+
+def test_readiness_endpoint_returns_503_for_unreadable_database(tmp_path: Any) -> None:
+    database = tmp_path / "missing" / "network-agent.db"
+    response = _client(token="a" * 32, database=str(database)).get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json()["checks"]["database_integrity"] is False
+    assert database.parent.exists() is False
 
 
 def test_api_denies_access_when_authentication_is_not_configured() -> None:

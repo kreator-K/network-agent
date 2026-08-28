@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import sqlite3
 from typing import Any, Literal, cast
 from uuid import uuid4
 
@@ -226,7 +227,7 @@ async def _ready(request: Request) -> JSONResponse:
 
         with connect(_database(request)) as connection:
             checks["database_integrity"] = connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    except (OSError, ValueError):
+    except (OSError, ValueError, sqlite3.Error):
         checks["database_integrity"] = False
     ready = all(checks.values())
     return JSONResponse(
