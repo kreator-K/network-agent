@@ -13,6 +13,7 @@ def test_ci_pins_python_and_frontend_node_runtimes() -> None:
     assert 'node-version: "22"' in workflow
     assert "python -m pytest" in workflow
     assert "npm run build" in workflow
+    assert "npm run deployment-check" in workflow
 
 
 def test_ci_keeps_provider_writes_disabled_and_uses_read_only_permissions() -> None:

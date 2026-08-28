@@ -66,5 +66,12 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
+      - name: Deployment configuration contract
+        env:
+          NETWORK_API_BASE_URL: https://api.example.com
+          WEB_API_TOKEN: ci-web-api-token-012345678901234567890123
+          WEB_SESSION_SECRET: ci-web-session-secret-012345678901234567890123
+          WEB_OWNER_PASSWORD_HASH: 2bd4b135dc4a4d235b259e740f93343a:0656ca0056081748df00d5e4070debb99ab60a30ec174b34a378fea369ba02b3cdb18f7a1cbe04f985e877467d2ea699da2081542df053f6d17a73ab4af0ade3
+        run: npm run deployment-check
       - name: Dependency audit
         run: npm audit --omit=dev
