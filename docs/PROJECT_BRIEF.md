@@ -4,7 +4,7 @@
 
 `network-agent` powers the Network Growth Agent, a multi-agent assistant for professional networking and personal-brand building during a job search. The product reduces manual work around prospect intake, outreach drafting, relationship tracking, LinkedIn content preparation, and meeting coordination.
 
-The system is explicitly human-in-the-loop. It may draft, organize, suggest, and prepare actions, but it must not send LinkedIn connection requests or LinkedIn messages at all. Outreach stays permanently draft-only: the user manually copies drafted outreach into LinkedIn and sends it themselves. LinkedIn posts and calendar blocks require explicit user approval through Telegram before any external action.
+The system is explicitly human-in-the-loop. It may draft, organize, suggest, and prepare actions, but it must not send LinkedIn connection requests or LinkedIn messages at all. Outreach stays permanently draft-only: the user manually copies drafted outreach into LinkedIn and sends it themselves. LinkedIn posts and calendar blocks require explicit user approval through the web UI/API before any external action. Telegram is migration-only.
 
 ## Core Safety Boundaries
 
@@ -13,9 +13,10 @@ The system is explicitly human-in-the-loop. It may draft, organize, suggest, and
 - No LinkedIn scraping or programmatic LinkedIn search.
 - No fabricated shared connections, experiences, skills, credentials, or claims.
 - Follow-ups may not be suggested more often than `FOLLOWUP_CADENCE_DAYS`, default 21 days, from `core_intent`.
-- Calendar blocking requires an explicit `/meeting_confirmed` command.
+- Calendar blocking requires a preview followed by the exact authenticated web
+  confirmation contract `MEETING_CONFIRMED`.
 - All model calls go through `ModelOrchestrationAgent`.
-- Telegram handlers call `NetworkOrchestrator`, not specialist agents directly.
+- Web/API handlers call `NetworkOrchestrator`, not specialist agents directly. The Telegram adapter is migration-only.
 
 ## Agents And Integration Module
 
@@ -37,7 +38,7 @@ The MVP also includes one supporting integration module:
 
 The MVP should provide:
 
-- Telegram as the primary user interface for intake, approvals, edits, and confirmations.
+- A Vercel-hosted web UI/API for intake, approvals, edits, and confirmations.
 - SQLite persistence for prospects, interactions, refinement history, core intent, and refinable parameters.
 - Mock mode by default for model and image calls.
 - A `ModelOrchestrationAgent` boundary for all LLM, VLM, and image-provider access.

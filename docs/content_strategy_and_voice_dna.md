@@ -42,7 +42,7 @@ activates a new version containing the voice-DNA fields.
 
 ## Review and selection
 
-Telegram package review shows the frozen plan, the selected primary post,
+Web package review shows the frozen plan, the selected primary post,
 previews of all variants, Hook A/B options, and the underperformance adjustment.
 Selecting another variant:
 

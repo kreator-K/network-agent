@@ -55,5 +55,5 @@ Goals:
 Completion criteria:
 - Natural-language meeting inference does not trigger calendar blocking.
 - `/meeting_confirmed` command validates required fields before calendar calls.
-- Calendar API failures are reported back through Telegram.
+- Calendar API failures are reported through the authenticated web workflow.
 - Relationship status and interaction history reflect successful calendar blocks.

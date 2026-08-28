@@ -4,7 +4,7 @@
 
 Rationale: LinkedIn posting through the Share/Posts API is straightforward to implement directly once developer app approval is obtained. Building fresh avoids inheriting unknown authentication assumptions, stale dependencies, and edge-case debt from a prior project.
 
-The module should remain a thin integration wrapper. It must not generate content, judge content quality, or decide whether a post should be published. It may only authenticate and publish content that has already received explicit human approval through Telegram.
+The module should remain a thin integration wrapper. It must not generate content, judge content quality, or decide whether a post should be published. It may only authenticate and publish content that has already received explicit human approval through the frozen web request lifecycle.
 
 ## Implementation Requirements
 
