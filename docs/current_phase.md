@@ -60,5 +60,7 @@ provides owner-token-protected signal, opportunity, and draft-content routes
 through `NetworkOrchestrator`, plus a public minimal health route. The Vercel
 frontend shell is implemented with Next.js 16.3.3, a responsive dashboard,
 Signals, Opportunities, and Content Studio routes, and a server-only typed API
-client. The next implementation step is web session identity and interactive
-actions.
+client. Web routes now require a signed, HTTP-only, eight-hour owner session
+created from a scrypt-verified password; missing production configuration fails
+closed. The next implementation step is authenticated interactive actions and
+durable production persistence.
