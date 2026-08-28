@@ -1,0 +1,57 @@
+services:
+  - type: web
+    name: network-growth-agent-api
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /readyz
+    numInstances: 1
+    maxShutdownDelaySeconds: 30
+    disk:
+      name: network-agent-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: APPLICATION_ENVIRONMENT
+        value: production
+      - key: DATABASE_PATH
+        value: /data/network_agent.db
+      - key: MEDIA_STORAGE_PATH
+        value: /data/media
+      - key: BACKUP_PATH
+        value: /data/backups
+      - key: LOG_PATH
+        value: /data/logs
+      - key: RUNTIME_STATE_PATH
+        value: /data/runtime
+      - key: LINKEDIN_TOKEN_PATH
+        value: /data/secrets/linkedin-tokens.enc
+      - key: DEPLOYMENT_PERSISTENCE_ACKNOWLEDGED
+        value: "true"
+      - key: NETWORK_AGENT_DOTENV_OVERRIDE
+        value: "false"
+      - key: MOCK_MODE
+        value: "true"
+      - key: IMAGE_MODE
+        value: disabled
+      - key: DAILY_BRIEFING_ENABLED
+        value: "false"
+      - key: PUBLIC_SIGNAL_ALLOW_HTTP
+        value: "false"
+      - key: LINKEDIN_PUBLISH_MODE
+        value: disabled
+      - key: LINKEDIN_REAL_PUBLISH_ENABLED
+        value: "false"
+      - key: WEB_API_TOKEN
+        generateValue: true
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: LINKEDIN_CLIENT_ID
+        sync: false
+      - key: LINKEDIN_CLIENT_SECRET
+        sync: false
+      - key: LINKEDIN_TOKEN_ENCRYPTION_KEY
+        sync: false
+      - key: LINKEDIN_REDIRECT_URI
+        sync: false

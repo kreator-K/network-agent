@@ -8,10 +8,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_container_pins_required_python_runtime_and_asgi_entrypoint() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    runner = (ROOT / "scripts" / "run_api.py").read_text(encoding="utf-8")
 
     assert "python:3.11-slim" in dockerfile
-    assert '"api.index:app"' in dockerfile
-    assert "--host" in dockerfile
+    assert '"scripts/run_api.py"' in dockerfile
+    assert 'uvicorn.run("api.index:app"' in runner
+    assert 'host="0.0.0.0"' in runner
 
 
 def test_compose_uses_named_durable_volumes_and_readiness_probe() -> None:
