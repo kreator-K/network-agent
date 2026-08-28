@@ -24,7 +24,9 @@ https://vercel.com/docs/functions/runtimes/python.
 3. Configure the four variables from `web/.env.example` for Preview and
    Production using distinct secrets.
 4. Generate the owner password hash locally with
-   `npm run hash-password -- '<password>'` from `web/`.
+   `npm run hash-password -- '<password>'` from `web/`, or pipe a password
+   through standard input to avoid placing it in the shell history:
+   `printf '%s' '<password>' | npm run hash-password`.
 5. Set `LINKEDIN_REDIRECT_URI` on the Python API to the production frontend URL
    plus `/linkedin/callback`, and register that exact URL in LinkedIn.
 6. Run `npm run typecheck`, `npm run build`, and
