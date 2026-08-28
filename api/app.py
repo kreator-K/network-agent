@@ -27,6 +27,10 @@ class SignalScanRequest(ApiModel):
     graph_mode: str | None = None
 
 
+class SignalWorkspaceResetRequest(ApiModel):
+    confirmation: Literal["CLEAR_SIGNAL_WORKSPACE"]
+
+
 class ContentPackageRequest(ApiModel):
     image_mode: str = "disabled"
     graph_mode: str | None = None
@@ -163,6 +167,7 @@ def create_app(
             Route("/api/v1/workflows", _workflow_runs, methods=["GET"]),
             Route("/api/v1/signals", _signals, methods=["GET"]),
             Route("/api/v1/signals/scan", _scan_signals, methods=["POST"]),
+            Route("/api/v1/signals/reset", _reset_signal_workspace, methods=["POST"]),
             Route("/api/v1/signals/{signal_id:int}/feedback", _signal_feedback, methods=["POST"]),
             Route("/api/v1/signal-sources", _signal_sources, methods=["GET", "POST"]),
             Route("/api/v1/signal-sources/catalog", _signal_source_catalog, methods=["GET"]),
@@ -304,6 +309,21 @@ async def _scan_signals(request: Request) -> JSONResponse:
             graph_mode=signal_request.graph_mode,
         ),
         status_code=202,
+    )
+
+
+async def _reset_signal_workspace(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    parsed = await _parse_body(request, SignalWorkspaceResetRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).clear_signal_workspace(
+            database=_database(request),
+        ),
     )
 
 

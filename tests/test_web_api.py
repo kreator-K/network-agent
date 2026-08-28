@@ -21,6 +21,10 @@ class FakeOrchestrator:
         self.calls.append(("scan", kwargs))
         return {"sources_scanned": 2}
 
+    def clear_signal_workspace(self, **kwargs: Any) -> dict[str, int]:
+        self.calls.append(("clear_signal_workspace", kwargs))
+        return {"signals": 2, "signal_sources": 1, "content_opportunities": 1, "preference_feedback": 3}
+
     def list_content_opportunities(self, **kwargs: Any) -> list[dict[str, Any]]:
         self.calls.append(("opportunities", kwargs))
         return [{"id": 3, "status": "candidate"}]
@@ -281,6 +285,25 @@ def test_signal_scan_accepts_only_typed_graph_mode_request() -> None:
     assert orchestrator.calls == [
         ("scan", {"database": "test.db", "graph_mode": "shadow"})
     ]
+
+
+def test_signal_workspace_reset_requires_exact_confirmation_and_delegates() -> None:
+    orchestrator = FakeOrchestrator()
+    invalid = _client(orchestrator).post(
+        "/api/v1/signals/reset",
+        headers=_headers(),
+        json={"confirmation": "clear"},
+    )
+    valid = _client(orchestrator).post(
+        "/api/v1/signals/reset",
+        headers=_headers(),
+        json={"confirmation": "CLEAR_SIGNAL_WORKSPACE"},
+    )
+
+    assert invalid.status_code == 422
+    assert valid.status_code == 200
+    assert valid.json()["data"]["signals"] == 2
+    assert orchestrator.calls == [("clear_signal_workspace", {"database": "test.db"})]
 
 
 def test_content_generation_remains_a_draft_orchestrator_operation() -> None:

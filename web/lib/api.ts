@@ -394,6 +394,14 @@ export async function scanSignals(): Promise<boolean> {
   return result !== null;
 }
 
+export async function clearSignalWorkspace(): Promise<boolean> {
+  const result = await apiRequest<unknown>("/api/v1/signals/reset", {
+    method: "POST",
+    body: JSON.stringify({ confirmation: "CLEAR_SIGNAL_WORKSPACE" }),
+  }, null);
+  return result !== null;
+}
+
 export async function generateContentPackage(opportunityId: number): Promise<boolean> {
   const result = await apiRequest<unknown>(`/api/v1/opportunities/${opportunityId}/content-package`, {
     method: "POST",

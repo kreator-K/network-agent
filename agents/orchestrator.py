@@ -963,6 +963,17 @@ class NetworkOrchestrator:
         except Exception as exc:
             _raise_with_context("get_signal_source_catalog", {}, exc)
 
+    def clear_signal_workspace(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, int]:
+        """Clear stored signals and their source configuration on explicit request."""
+        try:
+            return self.signal_intelligence_agent.clear_signal_workspace(database)
+        except Exception as exc:
+            _raise_with_context("clear_signal_workspace", {}, exc)
+
     def get_signal_source(
         self,
         source_id: int,

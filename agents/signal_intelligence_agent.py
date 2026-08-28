@@ -122,6 +122,40 @@ class SignalIntelligenceAgent:
             if should_close:
                 connection.close()
 
+    def clear_signal_workspace(self, database: DatabaseRef) -> dict[str, int]:
+        """Remove stored signal evidence and source configuration for a fresh start.
+
+        The catalog, profile, scoring configuration, CRM records, content drafts,
+        and audit receipts remain intact. Content drafts keep their text, while
+        SQLite clears their optional link to any removed opportunity.
+        """
+        connection, should_close = _coerce_connection(database)
+        try:
+            counts = {
+                "signal_sources": int(connection.execute("SELECT COUNT(*) FROM signal_sources").fetchone()[0]),
+                "signals": int(connection.execute("SELECT COUNT(*) FROM signals").fetchone()[0]),
+                "content_opportunities": int(connection.execute("SELECT COUNT(*) FROM content_opportunities").fetchone()[0]),
+                "preference_feedback": int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM content_preference_feedback "
+                        "WHERE target_type IN ('signal', 'opportunity')"
+                    ).fetchone()[0]
+                ),
+            }
+            with connection:
+                connection.execute(
+                    "DELETE FROM content_preference_feedback "
+                    "WHERE target_type IN ('signal', 'opportunity')"
+                )
+                connection.execute("DELETE FROM content_opportunities")
+                connection.execute("DELETE FROM signals")
+                connection.execute("DELETE FROM signal_sources")
+            logger.info("Signal workspace cleared: %s", counts)
+            return counts
+        finally:
+            if should_close:
+                connection.close()
+
     def set_source_approval(
         self,
         source_id: int,

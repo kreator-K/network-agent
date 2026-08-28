@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { addSignalSource, approveSignalSource, recordSignalFeedback, rejectSignalSource, scanSignals, setSignalSourceEnabled } from "@/lib/api";
+import { addSignalSource, approveSignalSource, clearSignalWorkspace, recordSignalFeedback, rejectSignalSource, scanSignals, setSignalSourceEnabled } from "@/lib/api";
 import { requireSession } from "@/lib/session";
 
 export async function runSignalScan() {
@@ -9,6 +9,14 @@ export async function runSignalScan() {
   await scanSignals();
   revalidatePath("/signals");
   revalidatePath("/");
+}
+
+export async function resetSignalWorkspace() {
+  await requireSession();
+  await clearSignalWorkspace();
+  revalidatePath("/signals");
+  revalidatePath("/");
+  revalidatePath("/opportunities");
 }
 
 export async function signalFeedback(formData: FormData) {

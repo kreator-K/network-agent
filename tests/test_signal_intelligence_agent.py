@@ -1,6 +1,7 @@
 """Tests for deterministic public-signal persistence and deduplication."""
 
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -97,3 +98,29 @@ def test_normalization_and_hashing_are_deterministic() -> None:
     assert normalized["title"] == "AI Product News"
     assert agent.generate_content_hash(normalized) == agent.generate_content_hash(normalized)
     assert agent.generate_dedupe_key(7, normalized) == "external:7:guid-1"
+
+
+def test_clear_signal_workspace_removes_signal_data_but_not_catalog(tmp_path: Path) -> None:
+    database_path = _database_path(tmp_path)
+    agent = SignalIntelligenceAgent()
+    source = agent.add_source("Example", "https://example.com/feed", database=database_path)
+    agent.persist_signal(source.id or 0, _item(), database_path)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO content_preference_feedback "
+            "(target_type, target_id, feedback_type, source, created_at) "
+            "VALUES ('signal', 1, 'more_like_this', 'web_api', '2026-01-01T00:00:00+00:00')"
+        )
+
+    result = agent.clear_signal_workspace(database_path)
+
+    assert result == {
+        "signal_sources": 1,
+        "signals": 1,
+        "content_opportunities": 0,
+        "preference_feedback": 1,
+    }
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM signal_sources").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM signals").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM content_preference_feedback").fetchone()[0] == 0

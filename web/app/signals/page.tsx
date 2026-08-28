@@ -1,7 +1,7 @@
 import { AppShell } from "@/components/app-shell";
 import { getSignalSourceCatalog, getSignalSources, getSignals } from "@/lib/api";
 import { requireSession } from "@/lib/session";
-import { createSignalSource, runSignalScan, signalFeedback, sourceDecision } from "./actions";
+import { createSignalSource, resetSignalWorkspace, runSignalScan, signalFeedback, sourceDecision } from "./actions";
 
 export default async function SignalsPage() {
   await requireSession();
@@ -9,7 +9,7 @@ export default async function SignalsPage() {
   const existingUrls = new Set(sources.map((source) => source.url));
   const suggestions = catalog.filter((source) => !existingUrls.has(source.url));
   return <AppShell><div className="page">
-    <div className="pageHeader"><div><p className="eyebrow">Evidence desk</p><h1>Signals</h1></div><form action={runSignalScan}><button className="primaryAction" type="submit">Scan approved sources</button></form></div>
+    <div className="pageHeader"><div><p className="eyebrow">Evidence desk</p><h1>Signals</h1></div><div className="pageActions"><form action={resetSignalWorkspace}><button className="secondaryAction" type="submit">Clear signal workspace</button></form><form action={runSignalScan}><button className="primaryAction" type="submit">Scan approved sources</button></form></div></div>
     <section className="panel sourcePanel">
       <div className="panelTitle"><h2>Source review</h2><span>Add → approve → enable</span></div>
       <form action={createSignalSource} className="sourceForm"><input name="name" placeholder="Feed name" required/><input name="url" type="url" placeholder="Public RSS or Atom URL" required/><select name="source_type" defaultValue="auto_feed"><option value="auto_feed">Auto-detect</option><option value="rss">RSS</option><option value="atom">Atom</option></select><button className="secondaryAction" type="submit">Add pending source</button></form>
