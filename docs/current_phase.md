@@ -65,6 +65,7 @@ created from a scrypt-verified password; missing production configuration fails
 closed. Authenticated Server Actions now support approved-source scanning and
 opportunity-to-draft generation without exposing the backend token. These are
 internal preparation actions only. Graph runs and node receipts are now stored
-atomically and append-only, with authenticated retrieval by run ID. The next
-implementation step is a production database adapter and deployment
-configuration.
+atomically and append-only, with authenticated retrieval by run ID. Recent run
+summaries are available through the protected Workflow Runs page with status
+and node-failure counts. The next implementation step is a production database
+adapter and deployment configuration.

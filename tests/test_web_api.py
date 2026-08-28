@@ -37,6 +37,10 @@ class FakeOrchestrator:
         self.calls.append(("workflow", {"run_id": run_id, **kwargs}))
         return {"run_id": run_id, "status": "completed"}
 
+    def list_workflow_runs(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.calls.append(("workflows", kwargs))
+        return [{"run_id": "run-123", "status": "completed"}]
+
 
 def _client(
     orchestrator: FakeOrchestrator | None = None,
@@ -169,4 +173,18 @@ def test_workflow_receipt_route_is_authenticated_and_delegated() -> None:
     assert response.json()["data"]["run_id"] == "run-123"
     assert orchestrator.calls == [
         ("workflow", {"run_id": "run-123", "database": "test.db"})
+    ]
+
+
+def test_workflow_history_route_returns_compact_receipts() -> None:
+    orchestrator = FakeOrchestrator()
+    response = _client(orchestrator).get(
+        "/api/v1/workflows?limit=9",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"][0]["run_id"] == "run-123"
+    assert orchestrator.calls == [
+        ("workflows", {"database": "test.db", "limit": 9})
     ]

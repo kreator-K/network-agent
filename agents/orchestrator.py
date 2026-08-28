@@ -27,7 +27,7 @@ from workflows.signal_intelligence import (
     run_signal_ingestion_graph,
     signal_graph_preview,
 )
-from workflows.persistence import get_workflow_run
+from workflows.persistence import get_workflow_run, list_workflow_runs
 
 
 DatabaseRef = str | Path
@@ -993,6 +993,18 @@ class NetworkOrchestrator:
             return get_workflow_run(database, run_id)
         except Exception as exc:
             _raise_with_context("get_workflow_run", {"run_id": run_id}, exc)
+
+    def list_workflow_runs(
+        self,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return recent append-only graph execution summaries."""
+        try:
+            return list_workflow_runs(database, limit=limit)
+        except Exception as exc:
+            _raise_with_context("list_workflow_runs", {"limit": limit}, exc)
 
     def score_signal(
         self, signal_id: int, *, database: sqlite3.Connection | DatabaseRef

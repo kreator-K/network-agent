@@ -7,6 +7,7 @@ export type Signal = {
   status?: string;
 };
 export type Opportunity = { id: number; headline: string; suggested_angle?: string; status: string; total_score?: number };
+export type WorkflowRun = { run_id: string; workflow_name: string; workflow_version: number; status: string; started_at: string; finished_at: string; node_count: number; failed_nodes: number };
 
 type ApiEnvelope<T> = { data: T };
 
@@ -26,6 +27,9 @@ export async function getSignals(): Promise<Signal[]> {
 
 export async function getOpportunities(): Promise<Opportunity[]> {
   return apiRequest<Opportunity[]>("/api/v1/opportunities?limit=20", { method: "GET" }, []);
+}
+export async function getWorkflowRuns(): Promise<WorkflowRun[]> {
+  return apiRequest<WorkflowRun[]>("/api/v1/workflows?limit=30", { method: "GET" }, []);
 }
 
 export async function scanSignals(): Promise<boolean> {

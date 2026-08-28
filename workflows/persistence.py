@@ -126,6 +126,46 @@ def get_workflow_run(database: WorkflowDatabaseRef, run_id: str) -> dict[str, An
             connection.close()
 
 
+def list_workflow_runs(
+    database: WorkflowDatabaseRef,
+    *,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Return recent workflow summaries without large node outputs."""
+    bounded = max(1, min(limit, 100))
+    connection, should_close = _coerce_connection(database)
+    try:
+        rows = connection.execute(
+            """
+            SELECT workflow_runs.*,
+                   COUNT(workflow_node_runs.node_id) AS node_count,
+                   SUM(CASE WHEN workflow_node_runs.status = 'failed' THEN 1 ELSE 0 END) AS failed_nodes
+            FROM workflow_runs
+            LEFT JOIN workflow_node_runs ON workflow_node_runs.run_id = workflow_runs.run_id
+            GROUP BY workflow_runs.run_id
+            ORDER BY workflow_runs.created_at DESC
+            LIMIT ?
+            """,
+            (bounded,),
+        ).fetchall()
+        return [
+            {
+                "run_id": row["run_id"],
+                "workflow_name": row["workflow_name"],
+                "workflow_version": row["workflow_version"],
+                "status": row["status"],
+                "started_at": row["started_at"],
+                "finished_at": row["finished_at"],
+                "node_count": row["node_count"],
+                "failed_nodes": row["failed_nodes"] or 0,
+            }
+            for row in rows
+        ]
+    finally:
+        if should_close:
+            connection.close()
+
+
 def _coerce_connection(database: WorkflowDatabaseRef) -> tuple[sqlite3.Connection, bool]:
     if isinstance(database, sqlite3.Connection):
         return database, False

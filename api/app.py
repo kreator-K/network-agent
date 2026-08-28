@@ -43,6 +43,7 @@ def create_app(
             Route("/healthz", _health, methods=["GET"]),
             Route("/api/v1/diagnostics", _diagnostics, methods=["GET"]),
             Route("/api/v1/workflows/{run_id:str}", _workflow_run, methods=["GET"]),
+            Route("/api/v1/workflows", _workflow_runs, methods=["GET"]),
             Route("/api/v1/signals", _signals, methods=["GET"]),
             Route("/api/v1/signals/scan", _scan_signals, methods=["POST"]),
             Route("/api/v1/opportunities", _opportunities, methods=["GET"]),
@@ -97,6 +98,22 @@ async def _workflow_run(request: Request) -> JSONResponse:
         lambda: _orchestrator(request).get_workflow_run(
             run_id,
             database=_database(request),
+        ),
+    )
+
+
+async def _workflow_runs(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    limit = _bounded_limit(request, default=20)
+    if isinstance(limit, JSONResponse):
+        return limit
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).list_workflow_runs(
+            database=_database(request),
+            limit=limit,
         ),
     )
 

@@ -14,6 +14,7 @@ from workflows.contracts import (
 from workflows.persistence import (
     WorkflowPersistenceError,
     get_workflow_run,
+    list_workflow_runs,
     save_workflow_run,
 )
 
@@ -67,3 +68,25 @@ def test_missing_workflow_receipt_returns_clean_error(tmp_path) -> None:
 
     with pytest.raises(WorkflowPersistenceError, match="does not exist"):
         get_workflow_run(database, "missing")
+
+
+def test_recent_workflow_list_returns_compact_node_counts(tmp_path) -> None:
+    database = tmp_path / "workflow.db"
+    initialize_database(database)
+    run = _run()
+    save_workflow_run(database, run)
+
+    rows = list_workflow_runs(database)
+
+    assert rows == [
+        {
+            "run_id": "run-123",
+            "workflow_name": "test_graph",
+            "workflow_version": 1,
+            "status": "completed",
+            "started_at": run.started_at.isoformat(),
+            "finished_at": run.finished_at.isoformat(),
+            "node_count": 1,
+            "failed_nodes": 0,
+        }
+    ]
