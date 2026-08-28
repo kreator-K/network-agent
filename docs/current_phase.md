@@ -41,11 +41,15 @@ release gate passed with 409 tests, mypy across 78 files, Ruff, migration, and
 integrity checks. Real LinkedIn publishing remains disabled and no provider
 write is part of the release certification.
 
-Phase 10 — Deployment and Private Beta: in progress.
+Former Phase 10 systemd/Telegram deployment: retired. Telegram is retained only
+as a migration adapter while the product moves to an authenticated Vercel web
+UI/API.
 
-Deployment target: one Linux VM with systemd, one writable SQLite instance,
-one bot, one callback adapter behind stable HTTPS, one Calendar MCP child, and
-one backup timer. Live readiness awaits a stable production domain and
-numeric Telegram owner/admin IDs in `.env.local`.
+Graph Orchestration Foundation — Phase 0 complete; Phase 1 foundation complete.
 
-Phase 11: not started and intentionally not defined.
+The typed in-process graph engine now validates workflow topology and Pydantic
+node contracts, executes independent nodes with bounded parallelism, isolates
+failed branches, caps retries, supports cooperative cancellation, and returns
+persistence-neutral run records. No active product workflow has been switched
+to the engine yet. The next implementation step is a feature-flagged,
+shadow-mode signal-intelligence graph.

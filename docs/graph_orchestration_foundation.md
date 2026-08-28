@@ -1,0 +1,75 @@
+# Graph Orchestration Foundation
+
+## Status
+
+Phase 0 contracts and the first Phase 1 in-process engine are implemented.
+This foundation does not change any active product workflow yet. Signal and
+content graphs will be integrated behind feature flags after parity tests.
+
+## Boundary
+
+`GraphWorkflowEngine` is operational infrastructure, not a specialist agent.
+UI/API handlers continue to call `NetworkOrchestrator`, and all model calls
+continue to pass through `ModelOrchestrationAgent`. The graph engine cannot
+publish to LinkedIn, send outreach, or infer approval.
+
+## Contracts
+
+Each `NodeContract` declares:
+
+- a stable node ID;
+- explicit dependencies;
+- a Pydantic input schema;
+- a Pydantic output schema;
+- an input builder that receives only the root workflow input and declared
+  dependency artifacts;
+- one bounded handler;
+- a retry limit capped at three attempts.
+
+`WorkflowDefinition` validates unique node IDs, known dependencies, graph size,
+and acyclicity before execution. Open-ended cycles and runtime-created nodes are
+not supported by the first engine.
+
+## Execution
+
+The engine executes ready nodes in bounded parallel waves. A downstream node
+starts only after every declared dependency completes. Failed branches are
+contained: descendants are skipped, while independent branches continue.
+
+Provider exception messages are not retained in workflow results. Results store
+only a safe error type and generic detail. This makes the returned structure
+suitable for a future persistence adapter without accidentally storing provider
+payloads or secrets.
+
+Cancellation is cooperative. It prevents pending or queued nodes from starting,
+but it cannot forcibly stop Python code already running in a worker thread.
+Durable cancellation and per-node execution timeouts belong to the later queue
+integration phase.
+
+## First Production Graph
+
+The first product integration will be the signal-intelligence workflow:
+
+1. Load approved sources.
+2. Fetch independent sources with bounded fan-out.
+3. Normalize and persist through one controlled write boundary.
+4. Score eligible stored signals with bounded fan-out.
+5. Deterministically deduplicate and rank at a fan-in barrier.
+6. Create review-only opportunities.
+
+It will run in shadow mode against the existing sequential workflow before it
+becomes user-visible.
+
+## Deferred Work
+
+- PostgreSQL-backed workflow and node records.
+- Durable queue delivery and deployment recovery.
+- Per-node timeouts and delayed retries.
+- Feature-flagged signal and content graph definitions.
+- UI progress events and individual node retry controls.
+- Conditional model tiering.
+- Verifier panels and bounded convergent loops.
+- Dynamic graph proposals.
+
+Dynamic graphs will remain proposal-only until authorization, node-count, cost,
+depth, and approval-boundary validation exists.
