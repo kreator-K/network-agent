@@ -1509,7 +1509,7 @@ class NetworkOrchestrator:
             _raise_with_context("generate_content_package", {"opportunity_id": opportunity_id}, exc)
 
     def get_content_package(self, post_id: int, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
-        """Load one package-backed draft for Telegram review."""
+        """Load one package-backed draft for authenticated review."""
         try:
             return self.content_inspiration_agent.get_package(post_id, database).model_dump()
         except Exception as exc:

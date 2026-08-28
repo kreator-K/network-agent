@@ -61,6 +61,42 @@ class FakeOrchestrator:
         self.calls.append(("draft_followup", {"prospect_id": prospect_id, **kwargs}))
         return {"draft": {"draft_text": "Manual-send follow-up draft"}, "draft_interaction_id": 9}
 
+    def list_pending_content_packages(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.calls.append(("content_packages", kwargs))
+        return [{"id": 21, "draft_text": "Frozen candidate", "status": "saved", "package_version": 2}]
+
+    def approve_content_package_for_later(self, post_id: int, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("approve_content", {"post_id": post_id, **kwargs}))
+        return {"post_id": post_id, "status": "approved_for_later_posting"}
+
+    def get_content_publish_readiness(self, post_id: int, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("readiness", {"post_id": post_id, **kwargs}))
+        return {"exists": True, "ready": True, "blockers": []}
+
+    def get_linkedin_publish_status(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("linkedin_status", kwargs))
+        return {"publishing_mode": "disabled", "pending_confirmations": 1}
+
+    def list_linkedin_publish_history(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.calls.append(("publish_history", kwargs))
+        return [{"request_id": 31, "post_id": 21, "status": "awaiting_confirmation"}]
+
+    def prepare_linkedin_publish(self, post_id: int, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("prepare_publish", {"post_id": post_id, **kwargs}))
+        return {"request_id": 31, "post_id": post_id, "status": "awaiting_confirmation", "commentary": "Exact frozen text"}
+
+    def get_linkedin_publish_request(self, request_id: int, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("publish_request", {"request_id": request_id, **kwargs}))
+        return {"request_id": request_id, "status": "awaiting_confirmation"}
+
+    def confirm_linkedin_publish(self, request_id: int, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("confirm_publish", {"request_id": request_id, **kwargs}))
+        return {"request_id": request_id, "status": "disabled", "published": False}
+
+    def cancel_linkedin_publish(self, request_id: int, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("cancel_publish", {"request_id": request_id, **kwargs}))
+        return {"request_id": request_id, "status": "cancelled"}
+
 
 def _client(
     orchestrator: FakeOrchestrator | None = None,
@@ -299,3 +335,87 @@ def test_followups_due_is_read_only_and_authenticated() -> None:
     assert response.status_code == 200
     assert response.json()["data"][0]["prospect_id"] == 13
     assert orchestrator.calls == [("followups", {"database": "test.db"})]
+
+
+def test_content_approval_and_readiness_remain_separate_from_publish() -> None:
+    orchestrator = FakeOrchestrator()
+    client = _client(orchestrator)
+
+    packages = client.get("/api/v1/content", headers=_headers())
+    approved = client.post("/api/v1/content/21/approve", headers=_headers())
+    readiness = client.get("/api/v1/content/21/publish-readiness", headers=_headers())
+
+    assert packages.status_code == 200
+    assert approved.json()["data"]["status"] == "approved_for_later_posting"
+    assert readiness.json()["data"]["ready"] is True
+    assert orchestrator.calls == [
+        ("content_packages", {"database": "test.db"}),
+        ("approve_content", {"post_id": 21, "database": "test.db"}),
+        ("readiness", {"post_id": 21, "database": "test.db"}),
+    ]
+
+
+def test_publish_preview_is_frozen_before_any_confirmation() -> None:
+    orchestrator = FakeOrchestrator()
+    client = _client(orchestrator)
+
+    prepared = client.post(
+        "/api/v1/linkedin/publish-requests",
+        headers=_headers(),
+        json={"post_id": 21},
+    )
+
+    assert prepared.status_code == 201
+    assert prepared.json()["data"]["status"] == "awaiting_confirmation"
+    assert prepared.json()["data"]["commentary"] == "Exact frozen text"
+    assert orchestrator.calls == [
+        ("prepare_publish", {"post_id": 21, "database": "test.db"})
+    ]
+
+
+def test_publish_confirmation_requires_exact_typed_contract() -> None:
+    orchestrator = FakeOrchestrator()
+    client = _client(orchestrator)
+
+    missing = client.post(
+        "/api/v1/linkedin/publish-requests/31/confirm",
+        headers=_headers(),
+        json={},
+    )
+    freeform = client.post(
+        "/api/v1/linkedin/publish-requests/31/confirm",
+        headers=_headers(),
+        json={"confirmation": "yes please"},
+    )
+    confirmed = client.post(
+        "/api/v1/linkedin/publish-requests/31/confirm",
+        headers=_headers(),
+        json={"confirmation": "CONFIRM_PUBLISH"},
+    )
+
+    assert missing.status_code == 422
+    assert freeform.status_code == 422
+    assert confirmed.status_code == 200
+    assert confirmed.json()["data"]["published"] is False
+    assert orchestrator.calls == [
+        ("confirm_publish", {"request_id": 31, "database": "test.db"})
+    ]
+
+
+def test_publish_history_and_cancellation_are_auditable() -> None:
+    orchestrator = FakeOrchestrator()
+    client = _client(orchestrator)
+
+    history = client.get("/api/v1/linkedin/publish-requests?limit=12", headers=_headers())
+    cancelled = client.post(
+        "/api/v1/linkedin/publish-requests/31/cancel",
+        headers=_headers(),
+        json={"confirmation": "CANCEL_PUBLISH"},
+    )
+
+    assert history.json()["data"][0]["request_id"] == 31
+    assert cancelled.json()["data"]["status"] == "cancelled"
+    assert orchestrator.calls == [
+        ("publish_history", {"database": "test.db", "limit": 12}),
+        ("cancel_publish", {"request_id": 31, "database": "test.db"}),
+    ]

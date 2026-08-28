@@ -184,7 +184,7 @@ class ContentInspirationAgent:
         self,
         database: sqlite3.Connection | str | Path,
     ) -> list[ContentPost]:
-        """Return content posts still waiting for Telegram review."""
+        """Return content posts still waiting for authenticated review."""
         connection, should_close = _coerce_connection(database)
         try:
             rows = connection.execute(

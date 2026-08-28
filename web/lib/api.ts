@@ -30,6 +30,41 @@ export type DraftResult = {
   context_warning?: { message?: string } | null;
   draft_interaction_id: number;
 };
+export type ContentPackage = {
+  id: number;
+  topic: string | null;
+  draft_text: string;
+  status: string;
+  package_version: number;
+  suggested_first_comment?: string | null;
+};
+export type LinkedInPublishStatus = {
+  publishing_mode: string;
+  real_publish_enabled: boolean;
+  connection_status: string;
+  pending_confirmations: number;
+  real_publishing_available: boolean;
+};
+export type PublishRequest = {
+  request_id: number;
+  post_id: number;
+  package_version: number;
+  format: string;
+  status: string;
+  commentary: string;
+  visibility: string;
+  payload_fingerprint: string;
+  assets: Array<{ path?: string; sha256?: string; role?: string }>;
+  expires_at: string;
+  reused?: boolean;
+  safe_error_summary?: string | null;
+};
+export type PublishActionResult = {
+  status: string;
+  published?: boolean;
+  message?: string;
+  request_id?: number;
+};
 
 type ApiEnvelope<T> = { data: T };
 
@@ -88,6 +123,47 @@ export async function draftFollowup(prospectId: number): Promise<DraftResult | n
   return apiRequest<DraftResult | null>(`/api/v1/prospects/${prospectId}/followup-draft`, {
     method: "POST",
     body: JSON.stringify({}),
+  }, null);
+}
+
+export async function getContentPackages(): Promise<ContentPackage[]> {
+  return apiRequest<ContentPackage[]>("/api/v1/content", { method: "GET" }, []);
+}
+
+export async function approveContentPackage(postId: number): Promise<boolean> {
+  const result = await apiRequest<unknown>(`/api/v1/content/${postId}/approve`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  }, null);
+  return result !== null;
+}
+
+export async function preparePublishRequest(postId: number): Promise<PublishRequest | null> {
+  return apiRequest<PublishRequest | null>("/api/v1/linkedin/publish-requests", {
+    method: "POST",
+    body: JSON.stringify({ post_id: postId }),
+  }, null);
+}
+
+export async function getLinkedInPublishStatus(): Promise<LinkedInPublishStatus | null> {
+  return apiRequest<LinkedInPublishStatus | null>("/api/v1/linkedin/status", { method: "GET" }, null);
+}
+
+export async function getPublishRequests(): Promise<PublishRequest[]> {
+  return apiRequest<PublishRequest[]>("/api/v1/linkedin/publish-requests?limit=50", { method: "GET" }, []);
+}
+
+export async function confirmPublishRequest(requestId: number): Promise<PublishActionResult | null> {
+  return apiRequest<PublishActionResult | null>(`/api/v1/linkedin/publish-requests/${requestId}/confirm`, {
+    method: "POST",
+    body: JSON.stringify({ confirmation: "CONFIRM_PUBLISH" }),
+  }, null);
+}
+
+export async function cancelPublishRequest(requestId: number): Promise<PublishActionResult | null> {
+  return apiRequest<PublishActionResult | null>(`/api/v1/linkedin/publish-requests/${requestId}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ confirmation: "CANCEL_PUBLISH" }),
   }, null);
 }
 

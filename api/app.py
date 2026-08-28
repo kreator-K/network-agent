@@ -43,6 +43,18 @@ class OutreachDraftRequest(ApiModel):
     ask_type: Literal["resume_review", "career_guidance", "general_chat"]
 
 
+class PublishPrepareRequest(ApiModel):
+    post_id: int = Field(gt=0)
+
+
+class PublishConfirmationRequest(ApiModel):
+    confirmation: Literal["CONFIRM_PUBLISH"]
+
+
+class PublishCancellationRequest(ApiModel):
+    confirmation: Literal["CANCEL_PUBLISH"]
+
+
 def create_app(
     *,
     orchestrator: NetworkOrchestrator | None = None,
@@ -65,11 +77,19 @@ def create_app(
                 _generate_content_package,
                 methods=["POST"],
             ),
+            Route("/api/v1/content", _content_packages, methods=["GET"]),
             Route("/api/v1/content/{post_id:int}", _content_package, methods=["GET"]),
+            Route("/api/v1/content/{post_id:int}/approve", _approve_content_package, methods=["POST"]),
+            Route("/api/v1/content/{post_id:int}/publish-readiness", _content_publish_readiness, methods=["GET"]),
             Route("/api/v1/prospects", _prospects, methods=["GET", "POST"]),
             Route("/api/v1/prospects/followups-due", _followups_due, methods=["GET"]),
             Route("/api/v1/prospects/{prospect_id:int}/outreach-draft", _outreach_draft, methods=["POST"]),
             Route("/api/v1/prospects/{prospect_id:int}/followup-draft", _followup_draft, methods=["POST"]),
+            Route("/api/v1/linkedin/status", _linkedin_status, methods=["GET"]),
+            Route("/api/v1/linkedin/publish-requests", _linkedin_publish_requests, methods=["GET", "POST"]),
+            Route("/api/v1/linkedin/publish-requests/{request_id:int}", _linkedin_publish_request, methods=["GET"]),
+            Route("/api/v1/linkedin/publish-requests/{request_id:int}/confirm", _confirm_linkedin_publish, methods=["POST"]),
+            Route("/api/v1/linkedin/publish-requests/{request_id:int}/cancel", _cancel_linkedin_publish, methods=["POST"]),
         ],
     )
     application.state.orchestrator = orchestrator or NetworkOrchestrator()
@@ -206,6 +226,44 @@ async def _content_package(request: Request) -> JSONResponse:
     )
 
 
+async def _content_packages(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).list_pending_content_packages(
+            database=_database(request),
+        ),
+    )
+
+
+async def _approve_content_package(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).approve_content_package_for_later(
+            int(request.path_params["post_id"]),
+            database=_database(request),
+        ),
+    )
+
+
+async def _content_publish_readiness(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).get_content_publish_readiness(
+            int(request.path_params["post_id"]),
+            database=_database(request),
+        ),
+    )
+
+
 async def _prospects(request: Request) -> JSONResponse:
     denied = _authorize(request)
     if denied:
@@ -277,6 +335,92 @@ async def _followup_draft(request: Request) -> JSONResponse:
             source="web_api",
         ),
         status_code=201,
+    )
+
+
+async def _linkedin_status(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).get_linkedin_publish_status(
+            database=_database(request),
+        ),
+    )
+
+
+async def _linkedin_publish_requests(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    if request.method == "GET":
+        limit = _bounded_limit(request, default=30)
+        if isinstance(limit, JSONResponse):
+            return limit
+        return _delegate(
+            request,
+            lambda: _orchestrator(request).list_linkedin_publish_history(
+                database=_database(request),
+                limit=limit,
+            ),
+        )
+    parsed = await _parse_body(request, PublishPrepareRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    publish_request = cast(PublishPrepareRequest, parsed)
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).prepare_linkedin_publish(
+            publish_request.post_id,
+            database=_database(request),
+        ),
+        status_code=201,
+    )
+
+
+async def _linkedin_publish_request(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).get_linkedin_publish_request(
+            int(request.path_params["request_id"]),
+            database=_database(request),
+        ),
+    )
+
+
+async def _confirm_linkedin_publish(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    parsed = await _parse_body(request, PublishConfirmationRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).confirm_linkedin_publish(
+            int(request.path_params["request_id"]),
+            database=_database(request),
+        ),
+    )
+
+
+async def _cancel_linkedin_publish(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    parsed = await _parse_body(request, PublishCancellationRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    return _delegate(
+        request,
+        lambda: _orchestrator(request).cancel_linkedin_publish(
+            int(request.path_params["request_id"]),
+            database=_database(request),
+        ),
     )
 
 
