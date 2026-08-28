@@ -30,3 +30,10 @@ def test_configuration_diagnostics_rejects_invalid_mode() -> None:
     result = configuration_diagnostics(replace(settings, linkedin_publish_mode="unsafe"))
     assert result["valid"] is False
     assert any(item["name"] == "LINKEDIN_PUBLISH_MODE" and not item["valid"] for item in result["checks"])
+
+
+def test_configuration_diagnostics_reports_web_interface_readiness() -> None:
+    result = configuration_diagnostics(replace(settings, web_api_token="x" * 32))
+
+    assert result["active_modes"]["interface"] == "web_ui"
+    assert result["beta_access_ready"] is True

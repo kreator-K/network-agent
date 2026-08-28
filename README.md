@@ -1,10 +1,16 @@
 # Network Growth Agent
 
-Network Growth Agent is an approval-first Telegram assistant for professional
+Network Growth Agent is an approval-first backend for professional
 networking and personal-brand workflows. It supports manual prospect intake,
 draft-only outreach, follow-up tracking, public-signal intelligence, content
 packages, explicit calendar confirmation, controlled refinement, and approved
 LinkedIn member publishing.
+
+Content packages use the active versioned personal-brand profile as voice DNA.
+Each new package freezes an editorial pillar, topical pillar, funnel position,
+three complete post variants, Hook A/B alternatives, and one evidence-preserving
+adjustment to test if the post underperforms. The authenticated web UI/API calls
+the orchestrator directly; the former Telegram adapter is migration-only.
 
 ## Quick Start
 
@@ -16,7 +22,6 @@ pip install -r requirements.txt
 cp config/.env.example .env.local
 .venv/bin/python scripts/init_db.py
 .venv/bin/python scripts/prepare_runtime.py
-.venv/bin/python scripts/run_bot.py
 ```
 
 `config/.env.example` is a template only. Runtime code loads the project-root
@@ -32,7 +37,7 @@ LINKEDIN_REAL_PUBLISH_ENABLED=false
 ```
 
 Both settings must explicitly permit a real write. Changing environment values
-requires restarting the bot and callback service.
+requires restarting the backend services.
 
 ## LinkedIn Publishing
 
@@ -52,7 +57,7 @@ Supported member formats are text, single image, multi-image, video, document,
 article, and poll. Every format uses the same approval, expiry, cancellation,
 idempotency, replay-prevention, and uncertainty boundary.
 
-Useful Telegram commands:
+Former Telegram command mappings (migration reference only):
 
 ```text
 /linkedin_connection_status
@@ -105,12 +110,13 @@ See [Phase 8G certification](docs/phase8g_complete_certification.md),
 Phase 9 release operations are documented in
 [the operator runbook](docs/operator_runbook.md), with a no-provider-write
 gate available through `scripts/release_check.py`. The gate verifies the
-active local configuration, generated Telegram command reference, tracked-file
+active local configuration, tracked-file
 secret patterns, SQLite migration/integrity, pytest, mypy, and Ruff. Use
 `scripts/backup_database.py` and `scripts/verify_backup.py` for the documented
 temporary backup/restore check.
 
-Phase 10 deployment uses the documented systemd target in `deploy/`. Review
-`docs/deployment_runbook.md`, set numeric Telegram allowlist values, configure
-a stable HTTPS callback domain, and run `scripts/pre_deploy.py` before
-installing services. No infrastructure is provisioned automatically.
+Phase 10's former systemd deployment is retired. Review
+`docs/vercel_deployment.md` for the Vercel frontend and Python 3.11 API boundary,
+review `docs/web_ui_migration.md`, and run
+`scripts/pre_deploy.py` for backend checks only. No infrastructure is
+provisioned automatically.

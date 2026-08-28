@@ -5,8 +5,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
-    ,"hash-password": "node scripts/hash-password.mjs"
+    "typecheck": "tsc --noEmit",
+    "hash-password": "node scripts/hash-password.mjs",
+    "deployment-check": "node scripts/deployment-check.mjs"
   },
   "dependencies": {
     "next": "16.3.3",

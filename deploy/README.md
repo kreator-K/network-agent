@@ -1,25 +1,18 @@
-# Systemd Deployment Target
+# Web deployment target
 
-Phase 10 supports one Linux VM with a dedicated non-root `network-agent`
-service account, one writable SQLite instance, one Telegram bot, one callback
-adapter, one Google Calendar MCP subprocess owned by the bot, and one backup
-timer. A reverse proxy terminates TLS and forwards only `/v1/callback`,
-`/healthz`, and `/readyz` to the callback service.
+The former Phase 10 systemd target is retired. The Next.js UI deploys on Vercel.
+The Python 3.11 API remains a separate service because Vercel's current Python
+runtime does not support 3.11. The legacy Telegram adapter is not active.
 
-Install the repository at an absolute path, keep `.env.local` outside the Git
-release artifact, and set `TELEGRAM_ALLOWED_USER_IDS` and
-`TELEGRAM_ADMIN_USER_IDS` to deliberate numeric IDs before starting. The unit
-files use `/opt/network-agent` as the deployment path and must be reviewed for
-the target host before installation.
+Keep `.env.local` outside the Git release artifact and review
+`docs/vercel_deployment.md` before exposing a web route. The old unit files are
+historical migration references and must not be enabled.
 
 ```bash
-python scripts/prepare_runtime.py
 python scripts/pre_deploy.py
-sudo systemctl enable --now network-agent-bot.service network-agent-callback.service network-agent-backup.timer
-curl -fsS https://beta.example.com/healthz
-curl -fsS https://beta.example.com/readyz
+curl -fsS https://<python-api>/healthz
 ```
 
-Do not expose the callback directly to the Internet without a managed HTTPS
-reverse proxy. Do not run more than one writable bot or scheduler against the
-same SQLite database.
+Do not expose the future API without authentication, stable HTTPS, and a
+reviewed persistence strategy. Do not run more than one writable backend
+process against the same SQLite database.

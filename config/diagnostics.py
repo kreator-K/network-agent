@@ -79,6 +79,11 @@ def configuration_diagnostics(current: Settings = settings) -> dict[str, Any]:
                 "numeric admin IDs" if current.telegram_admin_user_ids.strip() else "not configured",
             ),
             _check(
+                "WEB_API_TOKEN",
+                len(current.web_api_token) >= 32,
+                "configured" if len(current.web_api_token) >= 32 else "missing or too short",
+            ),
+            _check(
                 "LINKEDIN_PUBLISH_MODE",
                 current.linkedin_publish_mode in {"disabled", "mock", "real"},
                 current.linkedin_publish_mode if current.linkedin_publish_mode in {"disabled", "mock", "real"} else "invalid",
@@ -125,6 +130,7 @@ def configuration_diagnostics(current: Settings = settings) -> dict[str, Any]:
             "MOCK_MODE", "LINKEDIN_REAL_PUBLISH_ENABLED", "GENERATE_IMAGE_FOR_DRAFT_POSTS",
             "AUTO_GENERATE_CONTENT_IMAGES", "DAILY_BRIEFING_ENABLED", "BRIEFING_DRY_RUN",
             "PUBLIC_SIGNAL_ALLOW_HTTP",
+            "DEPLOYMENT_PERSISTENCE_ACKNOWLEDGED",
         ) if os.getenv(name) is not None and os.getenv(name, "").strip().lower() not in _BOOL_VALUES
     ]
     if invalid_booleans:
@@ -132,18 +138,19 @@ def configuration_diagnostics(current: Settings = settings) -> dict[str, Any]:
     valid = all(
         bool(item["valid"])
         for item in checks
-        if item["name"] not in {"TELEGRAM_ALLOWED_USER_IDS", "TELEGRAM_ADMIN_USER_IDS"}
+        if item["name"] not in {
+            "TELEGRAM_ALLOWED_USER_IDS",
+            "TELEGRAM_ADMIN_USER_IDS",
+            "WEB_API_TOKEN",
+        }
     )
-    beta_access_ready = any(
-        item["name"] == "TELEGRAM_ALLOWED_USER_IDS" and bool(item["valid"])
-        for item in checks
-    )
+    beta_access_ready = len(current.web_api_token) >= 32
     return {
         "valid": valid,
         "beta_access_ready": beta_access_ready,
         "checks": checks,
         "active_modes": {
-            "interface": "web_ui_pending",
+            "interface": "web_ui",
             "model": "mock" if current.mock_mode else "real",
             "image": current.image_mode,
             "briefing": "enabled" if current.daily_briefing_enabled else "disabled",
