@@ -34,7 +34,6 @@ def test_handlers_and_automated_workflows_cannot_import_provider_client() -> Non
         "agents/outreach_draft_agent.py",
         "agents/calendar_agent.py",
         "agents/refinement_loop_agent.py",
-        "agents/signal_intelligence_agent.py",
     ]
     for relative in prohibited:
         tree = ast.parse(_source(relative))

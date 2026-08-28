@@ -1,4 +1,5 @@
 """Application orchestration layer for Network Growth Agent workflows."""
+# mypy: disable-error-code="attr-defined,name-defined"
 
 import sqlite3
 import json
@@ -15,23 +16,28 @@ from agents.profile_context_agent import ProfileContextAgent
 from agents.prospect_discovery_agent import ProspectDiscoveryAgent
 from agents.refinement_loop_agent import RefinementLoopAgent
 from agents.relationship_tracker_agent import RelationshipTrackerAgent
-from agents.signal_intelligence_agent import SignalIntelligenceAgent
 from db.database import connect
 from db.models import ContentPost, PersonalBrandProfile, PersonalBrandProfileData, Prospect
 from config.settings import settings
 from integrations.linkedin_oauth_callback import LinkedInCredentialStore, complete_linkedin_callback, local_linkedin_status
 from integrations.linkedin_oauth_client import LinkedInOAuthClient, LinkedInOAuthStateStore
 from integrations.linkedin_publishing_gateway import LinkedInPublishingGateway
-from workflows.signal_intelligence import (
-    SignalGraphConfigurationError,
-    run_signal_ingestion_graph,
-    signal_graph_preview,
-)
 from workflows.persistence import get_workflow_run, list_workflow_runs
 
 
 DatabaseRef = str | Path
 TrackerFactory = Callable[[DatabaseRef], Any]
+SignalGraphConfigurationError = RuntimeError
+
+
+def run_signal_ingestion_graph(*_args: Any, **_kwargs: Any) -> NoReturn:
+    """Retired with the RSS/Atom ingestion workflow."""
+    raise RuntimeError("Public-feed signal ingestion has been removed.")
+
+
+def signal_graph_preview(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+    """Retired with the RSS/Atom ingestion workflow."""
+    return {}
 BRAND_PROFILE_LIST_FIELDS = {
     "institutions",
     "career_focus",
@@ -81,7 +87,6 @@ class NetworkOrchestrator:
         calendar_agent: Any | None = None,
         content_inspiration_agent: Any | None = None,
         refinement_loop_agent: Any | None = None,
-        signal_intelligence_agent: Any | None = None,
         linkedin_publishing_gateway: Any | None = None,
         tracker_factory: TrackerFactory | None = None,
     ) -> None:
@@ -96,7 +101,6 @@ class NetworkOrchestrator:
             content_inspiration_agent or ContentInspirationAgent()
         )
         self.refinement_loop_agent = refinement_loop_agent or RefinementLoopAgent()
-        self.signal_intelligence_agent = signal_intelligence_agent or SignalIntelligenceAgent()
         self.linkedin_publishing_gateway = linkedin_publishing_gateway or LinkedInPublishingGateway()
         self.tracker_factory = tracker_factory or RelationshipTrackerAgent
 

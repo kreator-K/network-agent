@@ -642,39 +642,6 @@ def test_guided_next_steps_prioritize_due_followups_and_review_work(
     assert "human-reviewed" in guide["steps"][0]["detail"]
 
 
-def test_bulk_signal_sources_keeps_valid_entries_when_one_is_invalid() -> None:
-    class Source:
-        def __init__(self, name: str) -> None:
-            self.name = name
-
-        def model_dump(self) -> dict[str, Any]:
-            return {"id": 5, "name": self.name}
-
-    class SourceAgent:
-        def add_source(self, **kwargs: Any) -> Source:
-            if kwargs["name"] == "Invalid":
-                raise ValueError("Invalid public URL")
-            return Source(kwargs["name"])
-
-    orchestrator = NetworkOrchestrator(signal_intelligence_agent=SourceAgent())
-
-    result = orchestrator.add_signal_sources(
-        [
-            {
-                "entry": "Good | https://example.com/feed",
-                "name": "Good",
-                "url": "https://example.com/feed",
-            },
-            {"entry": "Invalid | invalid", "name": "Invalid", "url": "invalid"},
-        ],
-        database="unused.db",
-    )
-
-    assert result["added"] == [{"id": 5, "name": "Good"}]
-    assert len(result["skipped"]) == 1
-    assert result["skipped"][0]["entry"] == "Invalid"
-
-
 def test_guided_next_steps_prioritize_pending_source_approval(tmp_path: Path) -> None:
     database_path = tmp_path / "network_agent.db"
     initialize_database(database_path)

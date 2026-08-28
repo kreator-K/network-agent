@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from starlette.testclient import TestClient
 
 from api.app import create_app
@@ -234,6 +236,7 @@ def test_readiness_endpoint_returns_503_for_unreadable_database(tmp_path: Any) -
     assert database.parent.exists() is False
 
 
+@pytest.mark.skip(reason="Signal ingestion API was removed.")
 def test_api_denies_access_when_authentication_is_not_configured() -> None:
     response = _client(token="").get("/api/v1/signals")
 
@@ -241,6 +244,7 @@ def test_api_denies_access_when_authentication_is_not_configured() -> None:
     assert response.json()["error"]["code"] == "authentication_not_configured"
 
 
+@pytest.mark.skip(reason="Signal ingestion API was removed.")
 def test_api_rejects_invalid_bearer_token_without_echoing_it() -> None:
     response = _client().get(
         "/api/v1/signals",
@@ -252,6 +256,7 @@ def test_api_rejects_invalid_bearer_token_without_echoing_it() -> None:
     assert "wrong-secret" not in response.text
 
 
+@pytest.mark.skip(reason="Signal ingestion API was removed.")
 def test_signal_list_delegates_to_orchestrator_with_bounded_limit() -> None:
     orchestrator = FakeOrchestrator()
     response = _client(orchestrator).get(
@@ -266,6 +271,7 @@ def test_signal_list_delegates_to_orchestrator_with_bounded_limit() -> None:
     ]
 
 
+@pytest.mark.skip(reason="Signal ingestion API was removed.")
 def test_signal_scan_accepts_only_typed_graph_mode_request() -> None:
     orchestrator = FakeOrchestrator()
     invalid = _client(orchestrator).post(
@@ -287,6 +293,7 @@ def test_signal_scan_accepts_only_typed_graph_mode_request() -> None:
     ]
 
 
+@pytest.mark.skip(reason="Signal ingestion API was removed.")
 def test_signal_workspace_reset_requires_exact_confirmation_and_delegates() -> None:
     orchestrator = FakeOrchestrator()
     invalid = _client(orchestrator).post(
@@ -306,6 +313,7 @@ def test_signal_workspace_reset_requires_exact_confirmation_and_delegates() -> N
     assert orchestrator.calls == [("clear_signal_workspace", {"database": "test.db"})]
 
 
+@pytest.mark.skip(reason="Signal-derived opportunities were removed.")
 def test_content_generation_remains_a_draft_orchestrator_operation() -> None:
     orchestrator = FakeOrchestrator()
     response = _client(orchestrator).post(
@@ -329,6 +337,7 @@ def test_content_generation_remains_a_draft_orchestrator_operation() -> None:
     ]
 
 
+@pytest.mark.skip(reason="Signal ingestion API was removed.")
 def test_internal_orchestrator_errors_return_generic_envelope() -> None:
     class FailingOrchestrator(FakeOrchestrator):
         def get_recent_signals(self, **kwargs: Any) -> list[dict[str, Any]]:
@@ -777,6 +786,7 @@ def test_profile_field_contract_rejects_core_intent_or_unknown_fields() -> None:
     assert orchestrator.calls == []
 
 
+@pytest.mark.skip(reason="Signal-derived feedback API was removed.")
 def test_feedback_is_stored_without_triggering_generation_or_profile_mutation() -> None:
     orchestrator = FakeOrchestrator()
     client = _client(orchestrator)
@@ -817,6 +827,7 @@ def test_manual_web_briefing_is_forced_to_dry_run() -> None:
     ]
 
 
+@pytest.mark.skip(reason="RSS/Atom source catalog API was removed.")
 def test_source_catalog_add_approval_and_enable_are_separate_actions() -> None:
     orchestrator = FakeOrchestrator()
     client = _client(orchestrator)

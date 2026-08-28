@@ -1,16 +1,6 @@
 {
   "formula_version": "8c-v1",
-  "weights": {
-    "topic_relevance": 0.23,
-    "audience_relevance": 0.14,
-    "credibility": 0.18,
-    "freshness": 0.12,
-    "originality": 0.1,
-    "personal_angle": 0.13,
-    "semantic_relevance": 0.05,
-    "audience_interest": 0.03,
-    "humor_suitability": 0.02
-  },
+  "weights": {"topic_relevance": 0.23, "audience_relevance": 0.14, "credibility": 0.18, "freshness": 0.12, "originality": 0.1, "personal_angle": 0.13, "semantic_relevance": 0.05, "audience_interest": 0.03, "humor_suitability": 0.02},
   "minimum_final_score": 55,
   "minimum_credibility_score": 45,
   "maximum_factual_risk": 35,
