@@ -67,5 +67,10 @@ opportunity-to-draft generation without exposing the backend token. These are
 internal preparation actions only. Graph runs and node receipts are now stored
 atomically and append-only, with authenticated retrieval by run ID. Recent run
 summaries are available through the protected Workflow Runs page with status
-and node-failure counts. The next implementation step is a production database
-adapter and deployment configuration.
+and node-failure counts.
+
+Web parity is complete through CRM intake and draft-only outreach, explicit
+meeting confirmation, versioned personal-brand profiles, reviewed public-feed
+catalogs, content revision/variant controls, OAuth, frozen LinkedIn publishing
+previews, dry briefings, feedback, and legacy Telegram retirement. The next
+implementation step is a production database adapter and deployment decision.

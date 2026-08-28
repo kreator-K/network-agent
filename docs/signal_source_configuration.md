@@ -21,4 +21,4 @@ HTTPS is required by default. The application blocks LinkedIn, localhost, privat
 
 ## Retention
 
-SQLite stores source attribution, feed metadata, short feed-item fields, normalized content, and hashes. It does not fetch arbitrary article pages or retain full feed bodies. Source seed configuration is empty by default; source records are managed in SQLite through approved workflows.
+SQLite stores source attribution, feed metadata, short feed-item fields, normalized content, and hashes. It does not fetch arbitrary article pages or retain full feed bodies. The optional local catalog in `config/signal_sources.json` contains pending, disabled suggestions only; source records are managed in SQLite through the web approval workflow.
