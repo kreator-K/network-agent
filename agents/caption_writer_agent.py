@@ -39,7 +39,12 @@ class CaptionWriterAgent:
             expected_schema={"text": str, "attribution": str, "disclosure": str, "unresolved_gaps": list},
         )
         result = response.get("result") if not response.get("fallback_used") else None
-        if isinstance(result, dict) and isinstance(result.get("text"), str) and result["text"].strip():
+        if (
+            isinstance(result, dict)
+            and isinstance(result.get("text"), str)
+            and result["text"].strip()
+            and result["text"].strip().lower() != "mock"
+        ):
             text = result["text"].strip()[:3000]
         return CaptionArtifact(
             status="completed",

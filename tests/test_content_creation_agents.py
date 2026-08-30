@@ -85,3 +85,23 @@ def test_hook_and_caption_model_output_is_used_when_valid() -> None:
     hook = HookWriterAgent().write(research, _plan(), model)
     assert hook.primary == "A precise opening."
     assert hook.selection_rationale == "Specific and grounded."
+
+
+def test_placeholder_mock_strings_never_replace_deterministic_content() -> None:
+    research = _research()
+    hook = HookWriterAgent().write(
+        research,
+        _plan(),
+        FakeModel({"primary": "mock", "alternatives": [], "selection_rationale": "mock"}),
+    )
+    carousel = CarouselMakerAgent().make(research, hook, _plan(), FakeModel())
+    caption = CaptionWriterAgent().write(
+        research,
+        hook,
+        carousel,
+        FakeModel({"text": "mock", "unresolved_gaps": []}),
+    )
+
+    assert hook.primary != "mock"
+    assert caption.text != "mock"
+    assert "evidence" in caption.text.lower()

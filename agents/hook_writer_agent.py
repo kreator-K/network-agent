@@ -47,7 +47,12 @@ class HookWriterAgent:
             expected_schema={"primary": str, "alternatives": list, "selection_rationale": str},
         )
         result = response.get("result") if not response.get("fallback_used") else None
-        if isinstance(result, dict) and isinstance(result.get("primary"), str) and result["primary"].strip():
+        if (
+            isinstance(result, dict)
+            and isinstance(result.get("primary"), str)
+            and result["primary"].strip()
+            and result["primary"].strip().lower() != "mock"
+        ):
             primary = result["primary"].strip()[:400]
             parsed: list[AlternativeHook] = []
             for item in result.get("alternatives", []):
