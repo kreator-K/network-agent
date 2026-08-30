@@ -910,13 +910,11 @@ class NetworkOrchestrator:
                     raise ValueError("Run the Research Agent before using this resource.")
             source_title = str(resource["title"] if resource else clean_topic)
             source_url = str(resource.get("url") or "") if resource else ""
-            evidence_parts = [
-                str(resource.get("source_text") or resource.get("notes") or "")
+            evidence_text = (
+                str(resource.get("source_text") or resource.get("notes") or "").strip()
                 if resource
-                else "",
-                (inspiration_notes or "").strip(),
-            ]
-            evidence_text = "\n\n".join(part for part in evidence_parts if part).strip()
+                else (inspiration_notes or "").strip()
+            )
             if not evidence_text:
                 evidence_text = source_title
 

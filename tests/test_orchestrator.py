@@ -551,6 +551,39 @@ def test_research_resource_builds_a_claim_linked_completed_brief(tmp_path: Path)
     assert brief["claim_ids"] == [f"research-{resource['id']}-claim-1"]
 
 
+def test_content_package_keeps_editorial_instructions_out_of_source_evidence(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "content.db"
+    initialize_database(database_path)
+    content = FakeContentInspirationAgent()
+    orchestrator = NetworkOrchestrator(content_inspiration_agent=content)
+    resource = orchestrator.add_research_resource(
+        "Evaluation report",
+        None,
+        None,
+        "A demo is not evidence of dependable behavior.",
+        database=database_path,
+    )
+    orchestrator.research_resource(int(resource["id"]), database=database_path)
+
+    orchestrator.create_research_content_package(
+        topic="Dependable AI products",
+        inspiration_notes="Write for product managers and keep it concise.",
+        research_resource_id=int(resource["id"]),
+        image_bytes=None,
+        image_content_type=None,
+        overlay_text=None,
+        image_alt_text=None,
+        generate_image=False,
+        database=database_path,
+    )
+
+    assert content.package_calls[0]["evidence_text"] == (
+        "A demo is not evidence of dependable behavior."
+    )
+
+
 def test_record_outreach_outcome_uses_current_active_version() -> None:
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
