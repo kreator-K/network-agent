@@ -122,6 +122,14 @@ class Settings:
     telegram_allowed_user_ids: str = os.getenv("TELEGRAM_ALLOWED_USER_IDS", "")
     telegram_admin_user_ids: str = os.getenv("TELEGRAM_ADMIN_USER_IDS", "")
     media_storage_path: str = os.getenv("MEDIA_STORAGE_PATH", "runtime/media")
+    supabase_url: str = os.getenv("SUPABASE_URL", "")
+    supabase_service_role_key: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+    supabase_storage_bucket: str = os.getenv(
+        "SUPABASE_STORAGE_BUCKET", "content-images"
+    )
+    content_image_max_bytes: int = int(
+        os.getenv("CONTENT_IMAGE_MAX_BYTES", "10485760")
+    )
     backup_path: str = os.getenv("BACKUP_PATH", "backups")
     log_path: str = os.getenv("LOG_PATH", "logs")
     runtime_state_path: str = os.getenv("RUNTIME_STATE_PATH", "runtime/state")

@@ -10,7 +10,7 @@ import hashlib
 from pathlib import Path
 from typing import cast
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from config.settings import settings
 
@@ -70,6 +70,41 @@ def render_branded_card(text: str, aspect_ratio: str = "1:1") -> str:
     digest = hashlib.sha256(f"{cleaned}|{aspect_ratio}".encode("utf-8")).hexdigest()[:16]
     destination = destination_dir / f"{digest}.png"
     image.save(destination, format="PNG")
+    return str(destination)
+
+
+def render_text_overlay(source_path: str, text: str) -> str:
+    """Render user-supplied text over a user-supplied image as a 4:5 PNG."""
+    cleaned = " ".join(text.split()).strip()
+    if not cleaned:
+        return source_path
+    source = Path(source_path)
+    with Image.open(source) as opened:
+        base = ImageOps.exif_transpose(opened).convert("RGB")
+    size = _ASPECT_RATIO_SIZES["4:5"]
+    image = ImageOps.fit(base, size, method=Image.Resampling.LANCZOS)
+    draw = ImageDraw.Draw(image, "RGBA")
+    margin = int(size[0] * 0.075)
+    max_width = size[0] - (2 * margin)
+    font = _fit_font(draw, cleaned, max_width, int(size[1] * 0.48), margin)
+    lines = _wrap_text(draw, cleaned, font, max_width)
+    line_height = int(font.size * 1.25)
+    block_height = line_height * len(lines)
+    panel_top = max(margin, size[1] - block_height - (margin * 2))
+    draw.rounded_rectangle(
+        (margin // 2, panel_top - margin // 2, size[0] - margin // 2, size[1] - margin // 2),
+        radius=28,
+        fill=(8, 15, 28, 205),
+    )
+    y = panel_top
+    for line in lines:
+        draw.text((margin, y), line, font=font, fill=(255, 255, 255, 255))
+        y += line_height
+    destination_dir = Path(settings.media_storage_path) / "overlays"
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(source.read_bytes() + cleaned.encode("utf-8")).hexdigest()[:16]
+    destination = destination_dir / f"{digest}.png"
+    image.save(destination, format="PNG", optimize=True)
     return str(destination)
 
 

@@ -35,6 +35,7 @@ from integrations.linkedin_publish_models import (
     PollPublishPayload,
     VideoPublishPayload,
 )
+from integrations.supabase_storage import SupabaseStorageError, read_asset_bytes
 
 
 DatabaseRef = sqlite3.Connection | str | Path
@@ -377,7 +378,7 @@ class LinkedInPublishingGateway:
             session = client.initialize_image_upload(owner)
             _validate_upload_not_expired(session.upload_url_expires_at)
             self._set_state(connection, request_id, "image_upload_in_progress")
-            client.upload_bytes(session.upload_urls[0], Path(asset["path"]).read_bytes(), content_type=asset["mime_type"])
+            client.upload_bytes(session.upload_urls[0], _read_asset(asset["path"]), content_type=asset["mime_type"])
             urns.append(session.asset_urn)
         self._store_asset_urns(connection, request_id, urns, "image_uploaded")
         return urns
@@ -387,7 +388,7 @@ class LinkedInPublishingGateway:
         session = client.initialize_document_upload(owner)
         _validate_upload_not_expired(session.upload_url_expires_at)
         self._set_state(connection, request_id, "upload_in_progress")
-        client.upload_bytes(session.upload_urls[0], Path(asset["path"]).read_bytes(), content_type=asset["mime_type"])
+        client.upload_bytes(session.upload_urls[0], _read_asset(asset["path"]), content_type=asset["mime_type"])
         self._set_state(connection, request_id, "upload_processing")
         status = client.get_asset_status("document", session.asset_urn)
         if status != "AVAILABLE":
@@ -408,7 +409,7 @@ class LinkedInPublishingGateway:
             upload_captions=captions is not None,
         )
         _validate_upload_not_expired(session.upload_url_expires_at)
-        data = Path(primary["path"]).read_bytes()
+        data = _read_asset(primary["path"])
         self._set_state(connection, request_id, "upload_in_progress")
         if session.parts:
             if session.parts[0].first_byte != 0 or session.parts[-1].last_byte != len(data) - 1:
@@ -431,11 +432,11 @@ class LinkedInPublishingGateway:
         if thumbnail is not None:
             if not session.thumbnail_upload_url:
                 raise LinkedInApiUncertainError("LinkedIn omitted the requested thumbnail upload destination.")
-            client.upload_bytes(session.thumbnail_upload_url, Path(thumbnail["path"]).read_bytes(), content_type=thumbnail["mime_type"])
+            client.upload_bytes(session.thumbnail_upload_url, _read_asset(thumbnail["path"]), content_type=thumbnail["mime_type"])
         if captions is not None:
             if not session.captions_upload_url:
                 raise LinkedInApiUncertainError("LinkedIn omitted the requested captions upload destination.")
-            client.upload_bytes(session.captions_upload_url, Path(captions["path"]).read_bytes(), content_type=captions["mime_type"])
+            client.upload_bytes(session.captions_upload_url, _read_asset(captions["path"]), content_type=captions["mime_type"])
         client.finalize_video_upload(session.asset_urn, session.upload_token or "", etags)
         self._set_state(connection, request_id, "upload_processing")
         status = client.get_asset_status("video", session.asset_urn)
@@ -503,17 +504,27 @@ class LinkedInPublishingGateway:
         return {"format": publish_format, "payload": base, "assets": assets}
 
     def _asset(self, raw_path: str, alt_text: str, order: int, title: str | None = None, duration_seconds: float | None = None, role: Literal["primary", "thumbnail", "captions"] = "primary") -> dict[str, Any]:
-        path = Path(raw_path).expanduser().resolve()
-        if not path.is_file() or not path.stat().st_size:
+        if raw_path.startswith("supabase://"):
+            stored_path = raw_path
+            filename = raw_path.rsplit("/", 1)[-1]
+            data = _read_asset(raw_path)
+        else:
+            path = Path(raw_path).expanduser().resolve()
+            if not path.is_file() or not path.stat().st_size:
+                raise LinkedInPublishingError("An approved publication asset is missing or empty.")
+            stored_path = str(path)
+            filename = path.name
+            data = path.read_bytes()
+        if not data:
             raise LinkedInPublishingError("An approved publication asset is missing or empty.")
-        mime = _detect_mime(path)
-        size = path.stat().st_size
+        mime = _detect_mime_bytes(data, filename)
+        size = len(data)
         if mime in {"image/jpeg", "image/png", "image/gif"}:
             if not alt_text.strip():
                 raise LinkedInPublishingError("Approved image alt text is required.")
             if size > settings.linkedin_max_image_bytes:
                 raise LinkedInPublishingError("Approved image exceeds the configured size limit.")
-            width, height = _image_dimensions(path, mime)
+            width, height = _image_dimensions_bytes(data, mime)
             if width * height >= 36_152_320:
                 raise LinkedInPublishingError("Approved image exceeds LinkedIn's pixel-count limit.")
         elif mime == "video/mp4":
@@ -527,7 +538,7 @@ class LinkedInPublishingGateway:
             raise LinkedInPublishingError("Unsupported LinkedIn publication asset MIME type.")
         elif size > settings.linkedin_max_document_bytes:
             raise LinkedInPublishingError("Approved document exceeds the configured size limit.")
-        return LinkedInMediaAsset(path=str(path), filename=path.name, mime_type=mime, sha256=_sha256(path.read_bytes()), size_bytes=size, alt_text=alt_text.strip() or None, title=title, order=order, duration_seconds=duration_seconds, role=role).model_dump()
+        return LinkedInMediaAsset(path=stored_path, filename=filename, mime_type=mime, sha256=_sha256(data), size_bytes=size, alt_text=alt_text.strip() or None, title=title, order=order, duration_seconds=duration_seconds, role=role).model_dump()
 
     @staticmethod
     def _validate_package(post: sqlite3.Row) -> None:
@@ -735,8 +746,12 @@ def _asset_role(value: Any) -> Literal["primary", "thumbnail", "captions"]:
 
 
 def _detect_mime(path: Path) -> str:
-    head = path.read_bytes()[:16]
-    suffix = path.suffix.lower()
+    return _detect_mime_bytes(path.read_bytes(), path.name)
+
+
+def _detect_mime_bytes(data: bytes, filename: str) -> str:
+    head = data[:16]
+    suffix = Path(filename).suffix.lower()
     if head.startswith(b"\xff\xd8\xff") and suffix in {".jpg", ".jpeg"}:
         return "image/jpeg"
     if head.startswith(b"\x89PNG\r\n\x1a\n") and suffix == ".png":
@@ -749,11 +764,11 @@ def _detect_mime(path: Path) -> str:
         return "application/pdf"
     if suffix == ".srt":
         try:
-            path.read_text(encoding="utf-8")
+            data.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise LinkedInPublishingError("Caption file must be UTF-8 text.") from exc
         return "text/plain"
-    guessed = mimetypes.guess_type(path.name)[0]
+    guessed = mimetypes.guess_type(filename)[0]
     allowed_office = {
         ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ".ppt": "application/vnd.ms-powerpoint", ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -764,7 +779,10 @@ def _detect_mime(path: Path) -> str:
 
 
 def _image_dimensions(path: Path, mime: str) -> tuple[int, int]:
-    data = path.read_bytes()
+    return _image_dimensions_bytes(path.read_bytes(), mime)
+
+
+def _image_dimensions_bytes(data: bytes, mime: str) -> tuple[int, int]:
     if mime == "image/png":
         return struct.unpack(">II", data[16:24])
     if mime == "image/gif":
@@ -780,3 +798,12 @@ def _image_dimensions(path: Path, mime: str) -> tuple[int, int]:
             return int.from_bytes(data[index + 7:index + 9], "big"), int.from_bytes(data[index + 5:index + 7], "big")
         index += max(length + 2, 2)
     raise LinkedInPublishingError("Could not validate approved image dimensions.")
+
+
+def _read_asset(path_or_uri: str) -> bytes:
+    try:
+        return read_asset_bytes(path_or_uri)
+    except (OSError, SupabaseStorageError) as exc:
+        raise LinkedInPublishingError(
+            "An approved publication asset is missing or unavailable."
+        ) from exc
