@@ -130,7 +130,7 @@ export type SignalSourceCatalogItem = {
   enabled: false;
   topics?: string[];
 };
-export type ResearchResource = { id: number; title: string; url: string | null; notes: string | null; created_at: string };
+export type ResearchResource = { id: number; title: string; url: string | null; notes: string | null; source_text?: string | null; research_brief_json?: string | null; created_at: string };
 
 type ApiEnvelope<T> = { data: T };
 
@@ -151,8 +151,11 @@ export async function getSignals(): Promise<Signal[]> {
 export async function getResearchResources(): Promise<ResearchResource[]> {
   return apiRequest<ResearchResource[]>("/api/v1/research-resources", { method: "GET" }, []);
 }
-export async function addResearchResource(input: { title: string; url?: string; notes?: string }): Promise<boolean> {
+export async function addResearchResource(input: { title: string; url?: string; notes?: string; source_text?: string }): Promise<boolean> {
   return (await apiRequest<unknown>("/api/v1/research-resources", { method: "POST", body: JSON.stringify(input) }, null)) !== null;
+}
+export async function researchResource(resourceId: number): Promise<boolean> {
+  return (await apiRequest<unknown>(`/api/v1/research-resources/${resourceId}/research`, { method: "POST", body: JSON.stringify({}) }, null)) !== null;
 }
 
 export async function getOpportunities(): Promise<Opportunity[]> {

@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS research_resources (
     title TEXT NOT NULL,
     url TEXT,
     notes TEXT,
+    source_text TEXT,
+    research_brief_json TEXT,
     created_at TEXT NOT NULL
 );
 

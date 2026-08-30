@@ -31,6 +31,7 @@ class ResearchResourceRequest(ApiModel):
     title: str = Field(min_length=1, max_length=200)
     url: str | None = Field(default=None, max_length=2000)
     notes: str | None = Field(default=None, max_length=2000)
+    source_text: str | None = Field(default=None, max_length=12000)
 
 
 class SignalWorkspaceResetRequest(ApiModel):
@@ -172,6 +173,7 @@ def create_app(
             Route("/api/v1/workflows/{run_id:str}", _workflow_run, methods=["GET"]),
             Route("/api/v1/workflows", _workflow_runs, methods=["GET"]),
             Route("/api/v1/research-resources", _research_resources, methods=["GET", "POST"]),
+            Route("/api/v1/research-resources/{resource_id:int}/research", _research_resource, methods=["POST"]),
             Route("/api/v1/content", _content_packages, methods=["GET"]),
             Route("/api/v1/content/{post_id:int}", _content_package, methods=["GET"]),
             Route("/api/v1/content/{post_id:int}/approve", _approve_content_package, methods=["POST"]),
@@ -249,7 +251,13 @@ async def _research_resources(request: Request) -> JSONResponse:
     if isinstance(parsed, JSONResponse):
         return parsed
     resource = cast(ResearchResourceRequest, parsed)
-    return _delegate(request, lambda: _orchestrator(request).add_research_resource(resource.title, resource.url, resource.notes, database=_database(request)), status_code=201)
+    return _delegate(request, lambda: _orchestrator(request).add_research_resource(resource.title, resource.url, resource.notes, resource.source_text, database=_database(request)), status_code=201)
+
+async def _research_resource(request: Request) -> JSONResponse:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    return _delegate(request, lambda: _orchestrator(request).research_resource(int(request.path_params["resource_id"]), database=_database(request)))
 
 
 async def _signals(request: Request) -> JSONResponse:

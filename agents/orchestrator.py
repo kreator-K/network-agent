@@ -11,6 +11,7 @@ from typing import Any, NoReturn, cast
 
 from agents.calendar_agent import CalendarAgent
 from agents.content_inspiration_agent import ContentInspirationAgent
+from agents.content_research_agent import ContentResearchAgent
 from agents.outreach_draft_agent import AskType, OutreachDraftAgent
 from agents.profile_context_agent import ProfileContextAgent
 from agents.prospect_discovery_agent import ProspectDiscoveryAgent
@@ -100,6 +101,7 @@ class NetworkOrchestrator:
         self.content_inspiration_agent = (
             content_inspiration_agent or ContentInspirationAgent()
         )
+        self.content_research_agent = ContentResearchAgent()
         self.refinement_loop_agent = refinement_loop_agent or RefinementLoopAgent()
         self.linkedin_publishing_gateway = linkedin_publishing_gateway or LinkedInPublishingGateway()
         self.tracker_factory = tracker_factory or RelationshipTrackerAgent
@@ -116,7 +118,7 @@ class NetworkOrchestrator:
             if should_close:
                 connection.close()
 
-    def add_research_resource(self, title: str, url: str | None, notes: str | None, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+    def add_research_resource(self, title: str, url: str | None, notes: str | None, source_text: str | None = None, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
         clean_title = title.strip()
         if not clean_title:
             raise ValueError("Resource title is required.")
@@ -124,8 +126,25 @@ class NetworkOrchestrator:
         try:
             now = datetime.now(UTC).isoformat()
             with connection:
-                cursor = connection.execute("INSERT INTO research_resources (title, url, notes, created_at) VALUES (?, ?, ?, ?)", (clean_title, (url or "").strip() or None, (notes or "").strip() or None, now))
+                cursor = connection.execute("INSERT INTO research_resources (title, url, notes, source_text, created_at) VALUES (?, ?, ?, ?, ?)", (clean_title, (url or "").strip() or None, (notes or "").strip() or None, (source_text or "").strip() or None, now))
             return dict(connection.execute("SELECT * FROM research_resources WHERE id = ?", (cursor.lastrowid,)).fetchone())
+        finally:
+            if should_close:
+                connection.close()
+
+    def research_resource(self, resource_id: int, *, database: sqlite3.Connection | DatabaseRef) -> dict[str, Any]:
+        connection, should_close = _coerce_connection(database)
+        try:
+            row = connection.execute("SELECT * FROM research_resources WHERE id = ?", (resource_id,)).fetchone()
+            if row is None:
+                raise ValueError("Research resource does not exist.")
+            item = dict(row)
+            brief = self.content_research_agent.build_brief([], [{"id": resource_id, "canonical_url": item.get("url") or "", "title": item["title"], "summary": item.get("source_text") or item.get("notes") or ""}], [])
+            payload = brief.model_dump_json()
+            with connection:
+                connection.execute("UPDATE research_resources SET research_brief_json = ? WHERE id = ?", (payload, resource_id))
+            item["research_brief_json"] = payload
+            return item
         finally:
             if should_close:
                 connection.close()

@@ -30,6 +30,13 @@ def connect(database_path: str | Path) -> sqlite3.Connection:
     return connection
 
 
+def _migrate_research_resource_columns(connection: sqlite3.Connection) -> None:
+    columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(research_resources)")}
+    for name in ("source_text", "research_brief_json"):
+        if name not in columns:
+            connection.execute(f"ALTER TABLE research_resources ADD COLUMN {name} TEXT")
+
+
 def initialize_database(
     database_path: str | Path,
     schema_path: str | Path = DEFAULT_SCHEMA_PATH,
@@ -42,6 +49,7 @@ def initialize_database(
     with connect(database_path) as connection:
         _prepare_linkedin_publish_legacy_migration(connection)
         connection.executescript(schema)
+        _migrate_research_resource_columns(connection)
         _migrate_interactions_connection_request_type(connection)
         _migrate_interactions_lifecycle_columns(connection)
         _migrate_content_posts_uploaded_image_source(connection)
