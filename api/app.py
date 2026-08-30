@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hmac
 import sqlite3
+import base64
+import binascii
 from typing import Any, Literal, cast
 from uuid import uuid4
 
@@ -11,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic_core import to_jsonable_python
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from agents.orchestrator import NetworkOrchestrator
@@ -41,6 +43,17 @@ class SignalWorkspaceResetRequest(ApiModel):
 class ContentPackageRequest(ApiModel):
     image_mode: str = "disabled"
     graph_mode: str | None = None
+
+
+class ContentDraftCreateRequest(ApiModel):
+    topic: str = Field(min_length=1, max_length=200)
+    inspiration_notes: str | None = Field(default=None, max_length=6000)
+    research_resource_id: int | None = Field(default=None, gt=0)
+    image_base64: str | None = Field(default=None, max_length=14_000_000)
+    image_content_type: Literal["image/jpeg", "image/png", "image/webp"] | None = None
+    overlay_text: str | None = Field(default=None, max_length=500)
+    image_alt_text: str | None = Field(default=None, max_length=500)
+    generate_image: bool = False
 
 
 class ProspectCreateRequest(ApiModel):
@@ -174,8 +187,9 @@ def create_app(
             Route("/api/v1/workflows", _workflow_runs, methods=["GET"]),
             Route("/api/v1/research-resources", _research_resources, methods=["GET", "POST"]),
             Route("/api/v1/research-resources/{resource_id:int}/research", _research_resource, methods=["POST"]),
-            Route("/api/v1/content", _content_packages, methods=["GET"]),
+            Route("/api/v1/content", _content_packages, methods=["GET", "POST"]),
             Route("/api/v1/content/{post_id:int}", _content_package, methods=["GET"]),
+            Route("/api/v1/content/{post_id:int}/image", _content_image, methods=["GET"]),
             Route("/api/v1/content/{post_id:int}/approve", _approve_content_package, methods=["POST"]),
             Route("/api/v1/content/{post_id:int}/publish-readiness", _content_publish_readiness, methods=["GET"]),
             Route("/api/v1/content/{post_id:int}/revise", _revise_content_package, methods=["POST"]),
@@ -520,15 +534,82 @@ async def _content_package(request: Request) -> JSONResponse:
     )
 
 
+async def _content_image(request: Request) -> Response:
+    denied = _authorize(request)
+    if denied:
+        return denied
+    try:
+        image = _orchestrator(request).get_content_image(
+            int(request.path_params["post_id"]), database=_database(request)
+        )
+    except Exception:
+        return _error(
+            "operation_failed",
+            "The requested content image is unavailable.",
+            _request_id(request),
+            404,
+        )
+    return Response(
+        image["bytes"],
+        media_type=image["content_type"],
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
 async def _content_packages(request: Request) -> JSONResponse:
     denied = _authorize(request)
     if denied:
         return denied
+    if request.method == "GET":
+        return _delegate(
+            request,
+            lambda: _orchestrator(request).list_pending_content_packages(
+                database=_database(request),
+            ),
+        )
+    parsed = await _parse_body(request, ContentDraftCreateRequest)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    content = cast(ContentDraftCreateRequest, parsed)
+    if bool(content.image_base64) != bool(content.image_content_type):
+        return _error(
+            "invalid_request",
+            "Image data and image content type must be supplied together.",
+            _request_id(request),
+            422,
+        )
+    image_bytes: bytes | None = None
+    if content.image_base64:
+        try:
+            image_bytes = base64.b64decode(content.image_base64, validate=True)
+        except (binascii.Error, ValueError):
+            return _error(
+                "invalid_request",
+                "Image data is not valid base64.",
+                _request_id(request),
+                422,
+            )
+        if len(image_bytes) > settings.content_image_max_bytes:
+            return _error(
+                "invalid_request",
+                "The uploaded image exceeds the 10 MB limit.",
+                _request_id(request),
+                422,
+            )
     return _delegate(
         request,
-        lambda: _orchestrator(request).list_pending_content_packages(
+        lambda: _orchestrator(request).create_research_content_package(
+            topic=content.topic,
+            inspiration_notes=content.inspiration_notes,
+            research_resource_id=content.research_resource_id,
+            image_bytes=image_bytes,
+            image_content_type=content.image_content_type,
+            overlay_text=content.overlay_text,
+            image_alt_text=content.image_alt_text,
+            generate_image=content.generate_image,
             database=_database(request),
         ),
+        status_code=201,
     )
 
 

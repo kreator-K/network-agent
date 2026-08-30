@@ -89,6 +89,31 @@ def test_user_image_takes_precedence_over_generate_image_flag(
     assert "Uploaded image context" in model.calls[0]["prompt"]
 
 
+def test_manual_research_package_runs_all_four_specialists(database_path: Path) -> None:
+    model = FakeModelOrchestrationAgent()
+    agent = ContentInspirationAgent(model)
+
+    post = agent.create_package_from_research(
+        topic="AI product evidence",
+        source_title="Evaluation report",
+        source_url="https://example.com/report",
+        evidence_text="The supplied report describes a bounded evaluation.",
+        research_resource_id=9,
+        image_source="none",
+        image_path=None,
+        image_alt_text=None,
+        database=database_path,
+    )
+
+    assert post.package_json is not None
+    assert post.opportunity_id is None
+    assert [call["task_type"] for call in model.calls] == [
+        "content_hook_generation",
+        "carousel_generation",
+        "caption_generation",
+    ]
+
+
 def test_generate_image_used_when_no_user_image_provided(
     mocker: pytest_mock.MockerFixture,
 ) -> None:

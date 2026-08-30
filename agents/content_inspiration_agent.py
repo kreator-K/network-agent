@@ -200,6 +200,191 @@ class ContentInspirationAgent:
             if should_close:
                 connection.close()
 
+    def create_package_from_research(
+        self,
+        *,
+        topic: str,
+        source_title: str,
+        source_url: str,
+        evidence_text: str,
+        research_resource_id: int | None,
+        image_source: ContentPostImageSource,
+        image_path: str | None,
+        image_alt_text: str | None,
+        database: sqlite3.Connection | str | Path,
+    ) -> ContentPost:
+        """Run the four specialist content stages for manually supplied research."""
+        connection, should_close = _coerce_connection(database)
+        try:
+            profile = connection.execute(
+                "SELECT version, profile_json FROM personal_brand_profile WHERE is_active=1"
+            ).fetchone()
+            scoring = connection.execute(
+                "SELECT version FROM signal_scoring_config WHERE is_active=1"
+            ).fetchone()
+            if profile is None or scoring is None:
+                raise ContentInspirationError(
+                    "Active brand profile and scoring configuration are required."
+                )
+            source_id = research_resource_id or 0
+            claim = FactualClaim(
+                id=f"research-{source_id}-claim-1",
+                claim_text=source_title,
+                source_signal_ids=[source_id],
+                confidence=0.8,
+                directly_supported=True,
+                softened=True,
+                risk_note="Use only the user-supplied research evidence.",
+            )
+            source_row = {
+                "id": source_id,
+                "canonical_url": source_url,
+                "title": source_title,
+                "summary": evidence_text,
+                "source_type": "manual_research_resource",
+            }
+            references = [
+                {
+                    "research_resource_id": research_resource_id,
+                    "url": source_url,
+                    "title": source_title,
+                    "source_type": "manual_research_resource",
+                }
+            ]
+            research = self.content_research_agent.build_brief(
+                references, [source_row], [claim]
+            )
+            plan = ContentPlan(
+                editorial_pillar="Source-backed insight",
+                topical_pillar=topic,
+                funnel_position="MOF",
+                hook_archetype="Evidence gap",
+                hook_idea="Open with the decision the evidence should change.",
+            )
+            hook = self.hook_writer_agent.write(
+                research, plan, self.model_orchestration_agent
+            )
+            carousel = self.carousel_maker_agent.make(
+                research, hook, plan, self.model_orchestration_agent, render=False
+            )
+            caption = self.caption_writer_agent.write(
+                research, hook, carousel, self.model_orchestration_agent
+            )
+            hook_options = [hook.primary, *[item.text for item in hook.alternatives]]
+            unique_hooks = list(dict.fromkeys(item.strip() for item in hook_options if item.strip()))
+            while len(unique_hooks) < 3:
+                unique_hooks.append(f"{topic}: the evidence should change a specific decision.")
+            body = caption.text.split("\n\n", 1)[-1]
+            variants = [
+                PostVariant(
+                    label=f"Variant {index}",
+                    hook_archetype="Evidence gap",
+                    funnel_position="MOF",
+                    post_text=caption.text if index == 1 else f"{opening}\n\n{body}",
+                )
+                for index, opening in enumerate(unique_hooks[:3], start=1)
+            ]
+            profile_data = _json_object(profile["profile_json"])
+            identity = str(
+                profile_data.get("professional_identity")
+                or "Professional learning from supplied research"
+            )
+            package = ContentPackage(
+                research_resource_id=research_resource_id,
+                primary_post=caption.text,
+                alternative_hooks=hook.alternatives,
+                content_plan=plan,
+                variants=variants,
+                hook_ab=HookAB(hook_a=unique_hooks[0], hook_b=unique_hooks[1]),
+                flop_adjustment="Tighten the opening while preserving the same evidence.",
+                research=research,
+                hook=hook,
+                carousel=carousel,
+                caption=caption,
+                target_audience="Professional network",
+                recommended_format="single_image" if image_path else "text",
+                content_treatment="Source-backed practical analysis",
+                source_references=references,
+                factual_claims=[claim],
+                personal_angle=PersonalAngle(
+                    angle_type="professional_identity", text=identity, verified=False
+                ),
+                image_brief=ImageBrief(
+                    objective="Support the post without adding factual claims.",
+                    visual_idea="Use the user-selected image and optional text overlay.",
+                    aspect_ratio="4:5",
+                    safety_notes=["Uploaded imagery takes precedence."],
+                ),
+                image_alt_text=image_alt_text,
+                risk_assessment=ContentRiskAssessment(
+                    factual_risk=15,
+                    generic_content_risk=20,
+                    notes=["Evidence is limited to manually supplied research."],
+                    validation_passed=True,
+                ),
+                why_it_fits_profile="The user selected this topic and evidence for their content workflow.",
+                profile_version=int(profile["version"]),
+                scoring_config_version=int(scoring["version"]),
+                package_version=1,
+            )
+            now = _utc_now()
+            cursor = connection.execute(
+                """INSERT INTO content_posts (
+                    topic, draft_text, image_source, image_path,
+                    inspiration_source_notes, status, opportunity_id,
+                    profile_version, scoring_config_version, package_version,
+                    package_json, source_references_json, factual_claims_json,
+                    alternative_hooks_json, personal_angle_json,
+                    risk_assessment_json, suggested_hashtags_json,
+                    image_brief_json, image_alt_text, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'draft', NULL, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    topic,
+                    package.primary_post,
+                    image_source,
+                    image_path,
+                    evidence_text,
+                    package.profile_version,
+                    package.scoring_config_version,
+                    _json_dump(package.model_dump()),
+                    _json_dump(package.source_references),
+                    _json_dump([item.model_dump() for item in package.factual_claims]),
+                    _json_dump([item.model_dump() for item in package.alternative_hooks]),
+                    _json_dump(package.personal_angle.model_dump()),
+                    _json_dump(package.risk_assessment.model_dump()),
+                    "[]",
+                    _json_dump(
+                        package.image_brief.model_dump()
+                        if package.image_brief is not None
+                        else None
+                    ),
+                    image_alt_text,
+                    now,
+                    now,
+                ),
+            )
+            post_id = _required_lastrowid(cursor)
+            _insert_content_version(
+                connection,
+                content_post_id=post_id,
+                package_version=1,
+                draft_text=package.primary_post,
+                package_json=_json_dump(package.model_dump()),
+                revision_type="manual_research_package",
+                revision_notes=None,
+                model_mode="specialist_pipeline",
+                fallback_used=settings.mock_mode,
+                created_at=now,
+            )
+            connection.commit()
+            row = connection.execute(
+                "SELECT * FROM content_posts WHERE id=?", (post_id,)
+            ).fetchone()
+            return _content_post_from_row(row)
+        finally:
+            if should_close:
+                connection.close()
+
     def generate_package_from_opportunity(
         self, opportunity_id: int, database: sqlite3.Connection | str | Path,
         image_mode: str = "disabled",

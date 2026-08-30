@@ -71,6 +71,14 @@ class FakeOrchestrator:
         self.calls.append(("content_packages", kwargs))
         return [{"id": 21, "draft_text": "Frozen candidate", "status": "saved", "package_version": 2}]
 
+    def create_research_content_package(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("create_content", kwargs))
+        return {"post": {"id": 22, "status": "draft", "image_source": "uploaded"}}
+
+    def get_content_image(self, post_id: int, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("content_image", {"post_id": post_id, **kwargs}))
+        return {"bytes": b"private-png", "content_type": "image/png"}
+
     def approve_content_package_for_later(self, post_id: int, **kwargs: Any) -> dict[str, Any]:
         self.calls.append(("approve_content", {"post_id": post_id, **kwargs}))
         return {"post_id": post_id, "status": "approved_for_later_posting"}
@@ -488,6 +496,56 @@ def test_content_approval_and_readiness_remain_separate_from_publish() -> None:
         ("content_packages", {"database": "test.db"}),
         ("approve_content", {"post_id": 21, "database": "test.db"}),
         ("readiness", {"post_id": 21, "database": "test.db"}),
+    ]
+
+
+def test_content_creation_accepts_a_typed_private_image_payload() -> None:
+    orchestrator = FakeOrchestrator()
+    response = _client(orchestrator).post(
+        "/api/v1/content",
+        headers=_headers(),
+        json={
+            "topic": "Evidence thresholds",
+            "research_resource_id": 7,
+            "image_base64": "cG5nLWRhdGE=",
+            "image_content_type": "image/png",
+            "overlay_text": "Evidence before confidence",
+            "image_alt_text": "A product decision workshop.",
+            "generate_image": True,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["data"]["post"]["status"] == "draft"
+    name, call = orchestrator.calls[0]
+    assert name == "create_content"
+    assert call["image_bytes"] == b"png-data"
+    assert call["database"] == "test.db"
+
+
+def test_content_creation_rejects_unpaired_image_fields() -> None:
+    orchestrator = FakeOrchestrator()
+    response = _client(orchestrator).post(
+        "/api/v1/content",
+        headers=_headers(),
+        json={"topic": "A topic", "image_base64": "cG5nLWRhdGE="},
+    )
+
+    assert response.status_code == 422
+    assert orchestrator.calls == []
+
+
+def test_content_image_is_authenticated_and_streamed_without_storage_details() -> None:
+    orchestrator = FakeOrchestrator()
+    response = _client(orchestrator).get(
+        "/api/v1/content/22/image", headers=_headers()
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"private-png"
+    assert response.headers["content-type"] == "image/png"
+    assert orchestrator.calls == [
+        ("content_image", {"post_id": 22, "database": "test.db"})
     ]
 
 

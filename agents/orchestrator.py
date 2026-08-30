@@ -4,6 +4,8 @@
 import sqlite3
 import json
 import hashlib
+from io import BytesIO
+from tempfile import TemporaryDirectory
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,11 +20,14 @@ from agents.prospect_discovery_agent import ProspectDiscoveryAgent
 from agents.refinement_loop_agent import RefinementLoopAgent
 from agents.relationship_tracker_agent import RelationshipTrackerAgent
 from db.database import connect
-from db.models import ContentPost, PersonalBrandProfile, PersonalBrandProfileData, Prospect
+from db.models import ContentPost, ContentPostImageSource, FactualClaim, PersonalBrandProfile, PersonalBrandProfileData, Prospect
 from config.settings import settings
 from integrations.linkedin_oauth_callback import LinkedInCredentialStore, complete_linkedin_callback, local_linkedin_status
 from integrations.linkedin_oauth_client import LinkedInOAuthClient, LinkedInOAuthStateStore
 from integrations.linkedin_publishing_gateway import LinkedInPublishingGateway
+from integrations import image_gateway
+from integrations.supabase_storage import SupabaseStorageGateway
+from PIL import Image, UnidentifiedImageError
 from workflows.persistence import get_workflow_run, list_workflow_runs
 
 
@@ -89,6 +94,7 @@ class NetworkOrchestrator:
         content_inspiration_agent: Any | None = None,
         refinement_loop_agent: Any | None = None,
         linkedin_publishing_gateway: Any | None = None,
+        storage_gateway: Any | None = None,
         tracker_factory: TrackerFactory | None = None,
     ) -> None:
         """Create an orchestrator with injectable agents for tests."""
@@ -104,6 +110,7 @@ class NetworkOrchestrator:
         self.content_research_agent = ContentResearchAgent()
         self.refinement_loop_agent = refinement_loop_agent or RefinementLoopAgent()
         self.linkedin_publishing_gateway = linkedin_publishing_gateway or LinkedInPublishingGateway()
+        self.storage_gateway = storage_gateway or SupabaseStorageGateway()
         self.tracker_factory = tracker_factory or RelationshipTrackerAgent
 
     def handle(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -139,7 +146,16 @@ class NetworkOrchestrator:
             if row is None:
                 raise ValueError("Research resource does not exist.")
             item = dict(row)
-            brief = self.content_research_agent.build_brief([], [{"id": resource_id, "canonical_url": item.get("url") or "", "title": item["title"], "summary": item.get("source_text") or item.get("notes") or ""}], [])
+            claim = FactualClaim(
+                id=f"research-{resource_id}-claim-1",
+                claim_text=str(item["title"]),
+                source_signal_ids=[resource_id],
+                confidence=0.8,
+                directly_supported=True,
+                softened=True,
+                risk_note="Use only the manually supplied resource evidence.",
+            )
+            brief = self.content_research_agent.build_brief([], [{"id": resource_id, "canonical_url": item.get("url") or "", "title": item["title"], "summary": item.get("source_text") or item.get("notes") or ""}], [claim])
             payload = brief.model_dump_json()
             with connection:
                 connection.execute("UPDATE research_resources SET research_brief_json = ? WHERE id = ?", (payload, resource_id))
@@ -862,6 +878,116 @@ class NetworkOrchestrator:
         except Exception as exc:
             _raise_with_context("draft_content_post", {"topic": topic}, exc)
 
+    def create_research_content_package(
+        self,
+        *,
+        topic: str,
+        inspiration_notes: str | None,
+        research_resource_id: int | None,
+        image_bytes: bytes | None,
+        image_content_type: str | None,
+        overlay_text: str | None,
+        image_alt_text: str | None,
+        generate_image: bool,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Create one review-only package through the four content specialists."""
+        clean_topic = " ".join(topic.split()).strip()
+        if not clean_topic:
+            raise ValueError("A post topic is required.")
+        connection, should_close = _coerce_connection(database)
+        try:
+            resource: dict[str, Any] | None = None
+            if research_resource_id is not None:
+                row = connection.execute(
+                    "SELECT * FROM research_resources WHERE id=?",
+                    (research_resource_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError("The selected research resource does not exist.")
+                resource = dict(row)
+                if not resource.get("research_brief_json"):
+                    raise ValueError("Run the Research Agent before using this resource.")
+            source_title = str(resource["title"] if resource else clean_topic)
+            source_url = str(resource.get("url") or "") if resource else ""
+            evidence_parts = [
+                str(resource.get("source_text") or resource.get("notes") or "")
+                if resource
+                else "",
+                (inspiration_notes or "").strip(),
+            ]
+            evidence_text = "\n\n".join(part for part in evidence_parts if part).strip()
+            if not evidence_text:
+                evidence_text = source_title
+
+            image_source: ContentPostImageSource = "none"
+            stored_image_path: str | None = None
+            alt_text = (image_alt_text or "").strip() or None
+            if image_bytes is not None:
+                if not alt_text:
+                    raise ValueError("Image alt text is required for an uploaded image.")
+                content_type = image_content_type or ""
+                try:
+                    with Image.open(BytesIO(image_bytes)) as opened:
+                        opened.verify()
+                except (OSError, UnidentifiedImageError) as exc:
+                    raise ValueError("The uploaded file is not a valid image.") from exc
+                upload_bytes = image_bytes
+                upload_type = content_type
+                if (overlay_text or "").strip():
+                    extension = {
+                        "image/jpeg": ".jpg",
+                        "image/png": ".png",
+                        "image/webp": ".webp",
+                    }.get(content_type)
+                    if extension is None:
+                        raise ValueError("Only JPEG, PNG, and WebP images are supported.")
+                    with TemporaryDirectory(prefix="network-agent-upload-") as directory:
+                        source = Path(directory) / f"source{extension}"
+                        source.write_bytes(image_bytes)
+                        rendered = Path(
+                            image_gateway.render_text_overlay(
+                                str(source), str(overlay_text)
+                            )
+                        )
+                        upload_bytes = rendered.read_bytes()
+                        upload_type = "image/png"
+                stored_image_path = self.storage_gateway.upload_image(
+                    upload_bytes, upload_type
+                )
+                image_source = "uploaded"
+            elif generate_image:
+                generated = Path(
+                    image_gateway.render_branded_card(
+                        (overlay_text or clean_topic), aspect_ratio="4:5"
+                    )
+                )
+                stored_image_path = self.storage_gateway.upload_image(
+                    generated.read_bytes(), "image/png"
+                )
+                image_source = "generated"
+                alt_text = alt_text or f"Branded text card about {clean_topic}."
+
+            post = self.content_inspiration_agent.create_package_from_research(
+                topic=clean_topic,
+                source_title=source_title,
+                source_url=source_url,
+                evidence_text=evidence_text,
+                research_resource_id=research_resource_id,
+                image_source=image_source,
+                image_path=stored_image_path,
+                image_alt_text=alt_text,
+                database=connection,
+            )
+            return {"post": post.model_dump()}
+        except Exception as exc:
+            _raise_with_context(
+                "create_research_content_package", {"topic": clean_topic}, exc
+            )
+        finally:
+            if should_close:
+                connection.close()
+
     def get_pending_content_drafts(
         self,
         *,
@@ -873,6 +999,41 @@ class NetworkOrchestrator:
             return [draft.model_dump() for draft in drafts]
         except Exception as exc:
             _raise_with_context("get_pending_content_drafts", {}, exc)
+
+    def get_content_image(
+        self,
+        post_id: int,
+        *,
+        database: sqlite3.Connection | DatabaseRef,
+    ) -> dict[str, Any]:
+        """Read one private content image for an authenticated API response."""
+        connection, should_close = _coerce_connection(database)
+        try:
+            row = connection.execute(
+                "SELECT image_path FROM content_posts WHERE id=?", (post_id,)
+            ).fetchone()
+            if row is None or not row["image_path"]:
+                raise ValueError("Content image does not exist.")
+            path = str(row["image_path"])
+            if path.startswith("supabase://"):
+                data = self.storage_gateway.read_bytes(path)
+            else:
+                data = Path(path).expanduser().resolve().read_bytes()
+            suffix = path.rsplit(".", 1)[-1].lower()
+            content_type = {
+                "jpg": "image/jpeg",
+                "jpeg": "image/jpeg",
+                "png": "image/png",
+                "webp": "image/webp",
+            }.get(suffix)
+            if content_type is None:
+                raise ValueError("Content image type is unsupported.")
+            return {"bytes": data, "content_type": content_type}
+        except Exception as exc:
+            _raise_with_context("get_content_image", {"post_id": post_id}, exc)
+        finally:
+            if should_close:
+                connection.close()
 
     def add_signal_source(
         self,

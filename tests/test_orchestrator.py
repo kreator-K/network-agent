@@ -2,10 +2,12 @@
 
 import json
 import sqlite3
+from io import BytesIO
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from PIL import Image
 
 from agents.orchestrator import NetworkOrchestrator, NetworkOrchestratorError
 from db.database import connect, initialize_database
@@ -243,6 +245,7 @@ class FakeContentInspirationAgent:
         self.draft_calls: list[dict[str, Any]] = []
         self.save_calls: list[dict[str, Any]] = []
         self.pending = [_content_post()]
+        self.package_calls: list[dict[str, Any]] = []
 
     def draft_post(self, **kwargs: Any) -> dict[str, Any]:
         self.draft_calls.append(kwargs)
@@ -268,6 +271,19 @@ class FakeContentInspirationAgent:
         database: sqlite3.Connection | str | Path,
     ) -> list[ContentPost]:
         return self.pending
+
+    def create_package_from_research(self, **kwargs: Any) -> ContentPost:
+        self.package_calls.append(kwargs)
+        return _content_post()
+
+
+class FakeStorageGateway:
+    def __init__(self) -> None:
+        self.uploads: list[tuple[bytes, str]] = []
+
+    def upload_image(self, data: bytes, content_type: str) -> str:
+        self.uploads.append((data, content_type))
+        return "supabase://content-images/studio/upload.png"
 
 
 class FakeRefinementLoopAgent:
@@ -483,6 +499,56 @@ def test_get_pending_content_drafts_returns_serializable_dicts() -> None:
     result = orchestrator.get_pending_content_drafts(database="content.db")
 
     assert result == [_content_post().model_dump()]
+
+
+def test_create_research_content_package_prefers_uploaded_image() -> None:
+    content = FakeContentInspirationAgent()
+    storage = FakeStorageGateway()
+    orchestrator = NetworkOrchestrator(
+        content_inspiration_agent=content,
+        storage_gateway=storage,
+    )
+    database = sqlite3.connect(":memory:")
+    database.row_factory = sqlite3.Row
+    image_buffer = BytesIO()
+    Image.new("RGB", (40, 40), color="blue").save(image_buffer, format="PNG")
+
+    result = orchestrator.create_research_content_package(
+        topic="AI product evidence",
+        inspiration_notes="Use a practical product lens.",
+        research_resource_id=None,
+        image_bytes=image_buffer.getvalue(),
+        image_content_type="image/png",
+        overlay_text=None,
+        image_alt_text="A blue placeholder image.",
+        generate_image=True,
+        database=database,
+    )
+
+    assert result["post"]["status"] == "draft"
+    assert len(storage.uploads) == 1
+    assert content.package_calls[0]["image_source"] == "uploaded"
+    assert content.package_calls[0]["image_path"].startswith("supabase://")
+
+
+def test_research_resource_builds_a_claim_linked_completed_brief(tmp_path: Path) -> None:
+    database_path = tmp_path / "research.db"
+    initialize_database(database_path)
+    orchestrator = NetworkOrchestrator()
+    resource = orchestrator.add_research_resource(
+        "Evaluation report",
+        "https://example.com/report",
+        "A bounded evaluation was described.",
+        database=database_path,
+    )
+
+    researched = orchestrator.research_resource(
+        int(resource["id"]), database=database_path
+    )
+    brief = json.loads(researched["research_brief_json"])
+
+    assert brief["status"] == "completed"
+    assert brief["claim_ids"] == [f"research-{resource['id']}-claim-1"]
 
 
 def test_record_outreach_outcome_uses_current_active_version() -> None:

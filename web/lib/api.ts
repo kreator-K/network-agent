@@ -37,6 +37,9 @@ export type ContentPackage = {
   status: string;
   package_version: number;
   suggested_first_comment?: string | null;
+  image_source?: "uploaded" | "generated" | "none";
+  image_path?: string | null;
+  image_alt_text?: string | null;
 };
 export type LinkedInPublishStatus = {
   publishing_mode: string;
@@ -204,6 +207,23 @@ export async function draftFollowup(prospectId: number): Promise<DraftResult | n
 
 export async function getContentPackages(): Promise<ContentPackage[]> {
   return apiRequest<ContentPackage[]>("/api/v1/content", { method: "GET" }, []);
+}
+
+export async function createContentPackage(input: {
+  topic: string;
+  inspiration_notes?: string;
+  research_resource_id?: number;
+  image_base64?: string;
+  image_content_type?: "image/jpeg" | "image/png" | "image/webp";
+  overlay_text?: string;
+  image_alt_text?: string;
+  generate_image?: boolean;
+}): Promise<boolean> {
+  const result = await apiRequest<unknown>("/api/v1/content", {
+    method: "POST",
+    body: JSON.stringify(input),
+  }, null);
+  return result !== null;
 }
 
 export async function approveContentPackage(postId: number): Promise<boolean> {

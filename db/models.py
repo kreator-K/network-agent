@@ -540,7 +540,8 @@ class ContentRiskAssessment(BaseModel):
 class ContentPackage(BaseModel):
     """Typed approval-ready package stored in a `content_posts` record."""
 
-    opportunity_id: int
+    opportunity_id: int | None = None
+    research_resource_id: int | None = None
     primary_post: str = Field(min_length=1, max_length=6000)
     alternative_hooks: list[AlternativeHook] = Field(min_length=2, max_length=3)
     content_plan: ContentPlan
