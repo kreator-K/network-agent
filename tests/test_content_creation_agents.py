@@ -105,3 +105,20 @@ def test_placeholder_mock_strings_never_replace_deterministic_content() -> None:
     assert hook.primary != "mock"
     assert caption.text != "mock"
     assert "evidence" in caption.text.lower()
+
+
+def test_demo_caption_turns_source_evidence_into_a_practical_decision_rule() -> None:
+    research = ResearchBrief(
+        sources=[{"id": "src-1", "url": "", "title": "Demo evidence", "summary": "A demo is not proof of reliability."}],
+        evidence_points=["Demo evidence: A demo is not proof of reliability."],
+        claim_ids=["claim-1"],
+    )
+    hook = HookWriterAgent().write(research, _plan(), FakeModel())
+    carousel = CarouselMakerAgent().make(research, hook, _plan(), FakeModel())
+
+    caption = CaptionWriterAgent().write(research, hook, carousel, FakeModel())
+
+    assert "A demo proves capability" in caption.text
+    assert "Test the boundary case" in caption.text
+    assert "blind trust" in caption.text
+    assert "Follow for" not in caption.text

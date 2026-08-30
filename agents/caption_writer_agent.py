@@ -23,12 +23,27 @@ class CaptionWriterAgent:
         carousel: CarouselArtifact,
         model: Any,
     ) -> CaptionArtifact:
-        text = (
-            f"{hook.primary}\n\n"
-            "The useful distinction is between what the source supports and what a product team decides to do next. "
-            "I would name the highest-risk boundary case, set the evidence threshold, and revisit the decision when the facts change.\n\n"
-            "Follow for the AI PM trends that actually matter."
-        )
+        evidence = research.evidence_points[0]
+        if "demo" in evidence.lower() or "dependab" in hook.primary.lower():
+            text = (
+                f"{hook.primary}\n\n"
+                f"{evidence}\n\n"
+                "A demo proves capability on a chosen path. Dependability asks a harder question: "
+                "what happens when the input is ambiguous, the edge case is expensive, or the model is wrong?\n\n"
+                "Before a wider rollout, I would require three things:\n"
+                "1. Test the boundary case with the highest cost of failure.\n"
+                "2. Define the pass-fail threshold before reviewing results.\n"
+                "3. Record what new evidence would pause or expand the release.\n\n"
+                "A promising demo earns the next test. It does not earn blind trust."
+            )
+        else:
+            text = (
+                f"{hook.primary}\n\n"
+                f"{evidence}\n\n"
+                "The useful distinction is between what the source supports and what a product team decides to do next.\n\n"
+                "I would name the highest-risk boundary case, define the evidence threshold before acting, "
+                "and record what new information would change the decision."
+            )
         response = model.run_task(
             task_type="caption_generation",
             prompt=(
